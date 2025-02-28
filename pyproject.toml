@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-dblp"
+version = "1.0.0"
+description = "An MCP server that allows you to search the DBLP computer sceince bibliography."
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.2.0",
+    "requests>=2.32.3",
+    "pandas>=2.2.3"
+]
+
+[project.scripts]
+mcp-dblp = "mcp_dblp.server:main"
+
+[tool.black]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+
+
