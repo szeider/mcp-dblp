@@ -52,7 +52,9 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
    ```bash
    git clone https://github.com/username/mcp-dblp.git
    cd mcp-dblp
-   pip install -e .
+   uv venv
+   source .venv/bin/activate 
+   uv pip install -e .  
    ```
 
 3. Create the configuration file:
@@ -162,140 +164,142 @@ Calculate statistics from a list of publication results.
 ### Output text:
 
 > Our exploration focuses on two types of explanation problems, abductive and contrastive, in local and global contexts \cite{MarquesSilvaI23}. Abductive explanations \cite{IgnatievNM19}, corresponding to prime-implicant explanations \cite{ShihCD18} and sufficient reason explanations \cite{DarwicheJ22}, clarify specific decision-making instances, while contrastive explanations \cite{Miller19}; \cite{IgnatievNA020}, corresponding to necessary reason explanations \cite{DarwicheJ22}, make explicit the reasons behind the non-selection of alternatives. Conversely, global explanations \cite{Ribeiro0G16}; \cite{IgnatievNM19} aim to unravel models' decision patterns across various inputs.
->
-> `@article{MarquesSilvaI23,`
->   `author       = {Jo{\~{a}}o Marques{-}Silva and`
->                   `Alexey Ignatiev},`
->   `title        = {No silver bullet: interpretable {ML} models must be explained},`
->   `journal      = {Frontiers Artif. Intell.},`
->   `volume       = {6},`
->   `year         = {2023},`
->   `url          = {https://doi.org/10.3389/frai.2023.1128212},`
->   `doi          = {10.3389/FRAI.2023.1128212},`
->   `timestamp    = {Tue, 07 May 2024 20:23:47 +0200},`
->   `biburl       = {https://dblp.org/rec/journals/frai/MarquesSilvaI23.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
->
-> `@inproceedings{IgnatievNM19,`
->   `author       = {Alexey Ignatiev and`
->                   `Nina Narodytska and`
->                   `Jo{\~{a}}o Marques{-}Silva},`
->   `title        = {Abduction-Based Explanations for Machine Learning Models},`
->   `booktitle    = {The Thirty-Third {AAAI} Conference on Artificial Intelligence, {AAAI}`
->                   `2019, The Thirty-First Innovative Applications of Artificial Intelligence`
->                   `Conference, {IAAI} 2019, The Ninth {AAAI} Symposium on Educational`
->                   `Advances in Artificial Intelligence, {EAAI} 2019, Honolulu, Hawaii,`
->                   `USA, January 27 - February 1, 2019},`
->   `pages        = {1511--1519},`
->   `publisher    = {{AAAI} Press},`
->   `year         = {2019},`
->   `url          = {https://doi.org/10.1609/aaai.v33i01.33011511},`
->   `doi          = {10.1609/AAAI.V33I01.33011511},`
->   `timestamp    = {Mon, 04 Sep 2023 12:29:24 +0200},`
->   `biburl       = {https://dblp.org/rec/conf/aaai/IgnatievNM19.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
->
-> `@inproceedings{ShihCD18,`
->   `author       = {Andy Shih and`
->                   `Arthur Choi and`
->                   `Adnan Darwiche},`
->   `editor       = {J{\'{e}}r{\^{o}}me Lang},`
->   `title        = {A Symbolic Approach to Explaining Bayesian Network Classifiers},`
->   `booktitle    = {Proceedings of the Twenty-Seventh International Joint Conference on`
->                   `Artificial Intelligence, {IJCAI} 2018, July 13-19, 2018, Stockholm,`
->                   `Sweden},`
->   `pages        = {5103--5111},`
->   `publisher    = {ijcai.org},`
->   `year         = {2018},`
->   `url          = {https://doi.org/10.24963/ijcai.2018/708},`
->   `doi          = {10.24963/IJCAI.2018/708},`
->   `timestamp    = {Tue, 20 Aug 2019 16:19:08 +0200},`
->   `biburl       = {https://dblp.org/rec/conf/ijcai/ShihCD18.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
->
-> `@inproceedings{DarwicheJ22,`
->   `author       = {Adnan Darwiche and`
->                   `Chunxi Ji},`
->   `title        = {On the Computation of Necessary and Sufficient Explanations},`
->   `booktitle    = {Thirty-Sixth {AAAI} Conference on Artificial Intelligence, {AAAI}`
->                   `2022, Thirty-Fourth Conference on Innovative Applications of Artificial`
->                   `Intelligence, {IAAI} 2022, The Twelveth Symposium on Educational Advances`
->                   `in Artificial Intelligence, {EAAI} 2022 Virtual Event, February 22`
->                   `- March 1, 2022},`
->   `pages        = {5582--5591},`
->   `publisher    = {{AAAI} Press},`
->   `year         = {2022},`
->   `url          = {https://doi.org/10.1609/aaai.v36i5.20498},`
->   `doi          = {10.1609/AAAI.V36I5.20498},`
->   `timestamp    = {Mon, 04 Sep 2023 16:50:24 +0200},`
->   `biburl       = {https://dblp.org/rec/conf/aaai/DarwicheJ22.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
->
-> `@article{Miller19,`
->   `author       = {Tim Miller},`
->   `title        = {Explanation in artificial intelligence: Insights from the social sciences},`
->   `journal      = {Artif. Intell.},`
->   `volume       = {267},`
->   `pages        = {1--38},`
->   `year         = {2019},`
->   `url          = {https://doi.org/10.1016/j.artint.2018.07.007},`
->   `doi          = {10.1016/J.ARTINT.2018.07.007},`
->   `timestamp    = {Thu, 25 May 2023 12:52:41 +0200},`
->   `biburl       = {https://dblp.org/rec/journals/ai/Miller19.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
->
-> `@inproceedings{IgnatievNA020,`
->   `author       = {Alexey Ignatiev and`
->                   `Nina Narodytska and`
->                   `Nicholas Asher and`
->                   `Jo{\~{a}}o Marques{-}Silva},`
->   `editor       = {Matteo Baldoni and`
->                   `Stefania Bandini},`
->   `title        = {From Contrastive to Abductive Explanations and Back Again},`
->   `booktitle    = {AIxIA 2020 - Advances in Artificial Intelligence - XIXth International`
->                   `Conference of the Italian Association for Artificial Intelligence,`
->                   `Virtual Event, November 25-27, 2020, Revised Selected Papers},`
->   `series       = {Lecture Notes in Computer Science},`
->   `volume       = {12414},`
->   `pages        = {335--355},`
->   `publisher    = {Springer},`
->   `year         = {2020},`
->   `url          = {https://doi.org/10.1007/978-3-030-77091-4\_21},`
->   `doi          = {10.1007/978-3-030-77091-4\_21},`
->   `timestamp    = {Tue, 15 Jun 2021 17:23:54 +0200},`
->   `biburl       = {https://dblp.org/rec/conf/aiia/IgnatievNA020.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
->
-> `@inproceedings{Ribeiro0G16,`
->   `author       = {Marco T{\'{u}}lio Ribeiro and`
->                   `Sameer Singh and`
->                   `Carlos Guestrin},`
->   `editor       = {Balaji Krishnapuram and`
->                   `Mohak Shah and`
->                   `Alexander J. Smola and`
->                   `Charu C. Aggarwal and`
->                   `Dou Shen and`
->                   `Rajeev Rastogi},`
->   `title        = {"Why Should {I} Trust You?": Explaining the Predictions of Any Classifier},`
->   `booktitle    = {Proceedings of the 22nd {ACM} {SIGKDD} International Conference on`
->                   `Knowledge Discovery and Data Mining, San Francisco, CA, USA, August`
->                   `13-17, 2016},`
->   `pages        = {1135--1144},`
->   `publisher    = {{ACM}},`
->   `year         = {2016},`
->   `url          = {https://doi.org/10.1145/2939672.2939778},`
->   `doi          = {10.1145/2939672.2939778},`
->   `timestamp    = {Fri, 25 Dec 2020 01:14:16 +0100},`
->   `biburl       = {https://dblp.org/rec/conf/kdd/Ribeiro0G16.bib},`
->   `bibsource    = {dblp computer science bibliography, https://dblp.org}`
-> `}`
 
+### Output Bibtex
+```
+@article{MarquesSilvaI23,
+ author       = {Jo{\~{a}}o Marques{-}Silva and
+                 Alexey Ignatiev},
+ title        = {No silver bullet: interpretable {ML} models must be explained},
+ journal      = {Frontiers Artif. Intell.},
+ volume       = {6},
+ year         = {2023},
+ url          = {https://doi.org/10.3389/frai.2023.1128212},
+ doi          = {10.3389/FRAI.2023.1128212},
+ timestamp    = {Tue, 07 May 2024 20:23:47 +0200},
+ biburl       = {https://dblp.org/rec/journals/frai/MarquesSilvaI23.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+@inproceedings{IgnatievNM19,
+ author       = {Alexey Ignatiev and
+                 Nina Narodytska and
+                 Jo{\~{a}}o Marques{-}Silva},
+ title        = {Abduction-Based Explanations for Machine Learning Models},
+ booktitle    = {The Thirty-Third {AAAI} Conference on Artificial Intelligence, {AAAI}
+                 2019, The Thirty-First Innovative Applications of Artificial Intelligence
+                 Conference, {IAAI} 2019, The Ninth {AAAI} Symposium on Educational
+                 Advances in Artificial Intelligence, {EAAI} 2019, Honolulu, Hawaii,
+                 USA, January 27 - February 1, 2019},
+ pages        = {1511--1519},
+ publisher    = {{AAAI} Press},
+ year         = {2019},
+ url          = {https://doi.org/10.1609/aaai.v33i01.33011511},
+ doi          = {10.1609/AAAI.V33I01.33011511},
+ timestamp    = {Mon, 04 Sep 2023 12:29:24 +0200},
+ biburl       = {https://dblp.org/rec/conf/aaai/IgnatievNM19.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+@inproceedings{ShihCD18,
+ author       = {Andy Shih and
+                 Arthur Choi and
+                 Adnan Darwiche},
+ editor       = {J{\'{e}}r{\^{o}}me Lang},
+ title        = {A Symbolic Approach to Explaining Bayesian Network Classifiers},
+ booktitle    = {Proceedings of the Twenty-Seventh International Joint Conference on
+                 Artificial Intelligence, {IJCAI} 2018, July 13-19, 2018, Stockholm,
+                 Sweden},
+ pages        = {5103--5111},
+ publisher    = {ijcai.org},
+ year         = {2018},
+ url          = {https://doi.org/10.24963/ijcai.2018/708},
+ doi          = {10.24963/IJCAI.2018/708},
+ timestamp    = {Tue, 20 Aug 2019 16:19:08 +0200},
+ biburl       = {https://dblp.org/rec/conf/ijcai/ShihCD18.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+@inproceedings{DarwicheJ22,
+ author       = {Adnan Darwiche and
+                 Chunxi Ji},
+ title        = {On the Computation of Necessary and Sufficient Explanations},
+ booktitle    = {Thirty-Sixth {AAAI} Conference on Artificial Intelligence, {AAAI}
+                 2022, Thirty-Fourth Conference on Innovative Applications of Artificial
+                 Intelligence, {IAAI} 2022, The Twelveth Symposium on Educational Advances
+                 in Artificial Intelligence, {EAAI} 2022 Virtual Event, February 22
+                 - March 1, 2022},
+ pages        = {5582--5591},
+ publisher    = {{AAAI} Press},
+ year         = {2022},
+ url          = {https://doi.org/10.1609/aaai.v36i5.20498},
+ doi          = {10.1609/AAAI.V36I5.20498},
+ timestamp    = {Mon, 04 Sep 2023 16:50:24 +0200},
+ biburl       = {https://dblp.org/rec/conf/aaai/DarwicheJ22.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+@article{Miller19,
+ author       = {Tim Miller},
+ title        = {Explanation in artificial intelligence: Insights from the social sciences},
+ journal      = {Artif. Intell.},
+ volume       = {267},
+ pages        = {1--38},
+ year         = {2019},
+ url          = {https://doi.org/10.1016/j.artint.2018.07.007},
+ doi          = {10.1016/J.ARTINT.2018.07.007},
+ timestamp    = {Thu, 25 May 2023 12:52:41 +0200},
+ biburl       = {https://dblp.org/rec/journals/ai/Miller19.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+@inproceedings{IgnatievNA020,
+ author       = {Alexey Ignatiev and
+                 Nina Narodytska and
+                 Nicholas Asher and
+                 Jo{\~{a}}o Marques{-}Silva},
+ editor       = {Matteo Baldoni and
+                 Stefania Bandini},
+ title        = {From Contrastive to Abductive Explanations and Back Again},
+ booktitle    = {AIxIA 2020 - Advances in Artificial Intelligence - XIXth International
+                 Conference of the Italian Association for Artificial Intelligence,
+                 Virtual Event, November 25-27, 2020, Revised Selected Papers},
+ series       = {Lecture Notes in Computer Science},
+ volume       = {12414},
+ pages        = {335--355},
+ publisher    = {Springer},
+ year         = {2020},
+ url          = {https://doi.org/10.1007/978-3-030-77091-4\_21},
+ doi          = {10.1007/978-3-030-77091-4\_21},
+ timestamp    = {Tue, 15 Jun 2021 17:23:54 +0200},
+ biburl       = {https://dblp.org/rec/conf/aiia/IgnatievNA020.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+
+@inproceedings{Ribeiro0G16,
+ author       = {Marco T{\'{u}}lio Ribeiro and
+                 Sameer Singh and
+                 Carlos Guestrin},
+ editor       = {Balaji Krishnapuram and
+                 Mohak Shah and
+                 Alexander J. Smola and
+                 Charu C. Aggarwal and
+                 Dou Shen and
+                 Rajeev Rastogi},
+ title        = {"Why Should {I} Trust You?": Explaining the Predictions of Any Classifier},
+ booktitle    = {Proceedings of the 22nd {ACM} {SIGKDD} International Conference on
+                 Knowledge Discovery and Data Mining, San Francisco, CA, USA, August
+                 13-17, 2016},
+ pages        = {1135--1144},
+ publisher    = {{ACM}},
+ year         = {2016},
+ url          = {https://doi.org/10.1145/2939672.2939778},
+ doi          = {10.1145/2939672.2939778},
+ timestamp    = {Fri, 25 Dec 2020 01:14:16 +0100},
+ biburl       = {https://dblp.org/rec/conf/kdd/Ribeiro0G16.bib},
+ bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+```
 ------
 
 ## Disclaimer
