@@ -34,7 +34,10 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
 | `get_venue_info`          | Get detailed information about a publication venue |
 | `calculate_statistics`    | Generate statistics from publication results       |
 
-------
+
+## Feedback
+
+Provide feedback to the author via this [form](https://form.jotform.com/szeider/mcp-dblp-feedback-form). 
 
 ## System Requirements
 
