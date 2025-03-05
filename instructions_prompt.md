@@ -8,6 +8,7 @@ You are given a text with embedded references in some format, for instance (auth
 2. Extract the COMPLETE and UNMODIFIED BibTeX entry for each citation directly from DBLP
 3. Output the text with each citation replaced by a \cite{..} command
 4. Output the BibTeX file containing all citations
+5. Save the bibtex file using export_bibtex tool
 
 ## Important Requirements
 
@@ -38,6 +39,7 @@ When presenting your solution, provide:
 
 1. The processed text with proper \cite{} commands
 2. The complete BibTeX file with entries preserving DBLP's exact format
+3. Save the bibtex file using export_bibtex
 
 ## Available Tools
 
@@ -53,3 +55,10 @@ This system provides the following tools to help with citation processing:
    - Parameters: venue_name (required)
 5. **calculate_statistics**: Generate statistics from publication results
    - Parameters: results (required)
+6. **export_bibtex**: Export BibTeX entries from a collection of HTML links into a file.
+   - Parameters: links (required) - HTML string containing one or more <a href=biburl>key</a> links
+   - Example: "<a href=https://dblp.org/rec/journals/example.bib>Smith23</a>"
+   - You can provide the bibtex key, the rest reamins exactly as retrived from DBLP
+   - The tool fetches BibTeX entries, replaces citation keys, and saves to a timestamped .bib file
+   - Returns the path to the saved file
+

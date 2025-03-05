@@ -6,12 +6,18 @@ Removing or renaming this function will break package imports and cause an error
   ImportError: cannot import name 'main' from 'mcp_dblp.server'
 """
 
+
+
 import sys
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 import os
 from pathlib import Path
+import re
+import datetime
+import requests
+import argparse
 
 # Import MCP SDK
 from mcp.server import Server, NotificationOptions
@@ -26,7 +32,8 @@ from mcp_dblp.dblp_client import (
     get_author_publications, 
     get_venue_info, 
     calculate_statistics,
-    fuzzy_title_search
+    fuzzy_title_search,
+    fetch_and_process_bibtex  
 )
 
 # Set up logging
@@ -44,15 +51,49 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mcp_dblp")
 
+
 try:
-    version_str = "1.0.0"
+    from importlib.metadata import version
+    version_str = version("mcp-dblp")
     logger.info(f"Loaded version: {version_str}")
 except Exception:
-    version_str = "1.0.0"
-    logger.warning("Using default version: 1.0.0")
+    version_str = "x.x.x"  # Anonymous fallback version
+    logger.warning(f"Using default version: {version_str}")
 
-async def serve() -> None:
+
+
+def parse_html_links(html_string):
+    """Parse HTML links of the form <a href=biburl>key</a> and extract URLs and keys."""
+    pattern = r'<a\s+href=([^>]+)>([^<]+)</a>'
+    matches = re.findall(pattern, html_string)
+    result = []
+    for url, key in matches:
+        url = url.strip('"\'')
+        key = key.strip()
+        result.append((url, key))
+    return result
+
+
+
+def export_bibtex_entries(entries, export_dir):
+    """Export BibTeX entries to a file with timestamp filename."""
+    os.makedirs(export_dir, exist_ok=True)
+    
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{timestamp}.bib"
+    filepath = os.path.join(export_dir, filename)
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        for entry in entries:
+            f.write(entry + "\n\n")
+    
+    return filepath
+
+async def serve(export_dir=None) -> None:
     """Main server function to handle MCP requests"""
+    if export_dir is None:
+        export_dir = os.path.expanduser("~/.mcp-dblp/exports")
+    
     server = Server("mcp-dblp")
     server.capabilities = {}
 
@@ -207,6 +248,32 @@ async def serve() -> None:
                     },
                     "required": ["results"]
                 }
+            ),
+            types.Tool(
+                name="export_bibtex",
+                description=(
+                    "Export BibTeX entries from a collection of HTML hyperlinks.\n"
+                    "Arguments:\n"
+                    "  - links (string, required): HTML string containing one or more <a href=biburl>key</a> links.\n"
+                    "    The href attribute should contain a URL to a BibTeX file, and the link text is used as the citation key.\n"
+                    "    Example input with three links:\n"
+                    "    \"<a href=https://dblp.org/rec/journals/example1.bib>Smith2023</a>\n"
+                    "     <a href=https://dblp.org/rec/conf/example2.bib>Jones2022</a>\n"
+                    "     <a href=https://dblp.org/rec/journals/example3.bib>Brown2021</a>\"\n"
+                    "Process:\n"
+                    "  - For each link, the tool fetches the BibTeX content from the URL\n"
+                    "  - The citation key in each BibTeX entry is replaced with the key from the link text\n"
+                    "  - All entries are combined and saved to a .bib file with a timestamp filename\n"
+                    "Returns:\n"
+                    "  - A message with the full path to the saved .bib file"
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "links": {"type": "string"}
+                    },
+                    "required": ["links"]
+                }
             )
         ]
 
@@ -319,6 +386,35 @@ async def serve() -> None:
                         type="text",
                         text=f"Statistics calculated:\n\n{format_dict(result)}"
                     )]
+                case "export_bibtex":
+                    if "links" not in arguments:
+                        return [types.TextContent(
+                            type="text",
+                            text="Error: Missing required parameter 'links'"
+                        )]
+                    
+                    html_links = arguments.get("links")
+                    links = parse_html_links(html_links)
+                    
+                    if not links:
+                        return [types.TextContent(
+                            type="text",
+                            text="Error: No valid links found in the input"
+                        )]
+                    
+                    # Fetch and process BibTeX entries
+                    bibtex_entries = []
+                    for url, key in links:
+                        bibtex = fetch_and_process_bibtex(url, key)
+                        bibtex_entries.append(bibtex)
+                    
+                    # Export to file
+                    filepath = export_bibtex_entries(bibtex_entries, export_dir)
+                    
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Exported {len(bibtex_entries)} BibTeX entries to {filepath}"
+                    )]
                 case _:
                     return [types.TextContent(
                         type="text",
@@ -422,9 +518,14 @@ def format_dict(data):
     return "\n".join(formatted)
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="MCP-DBLP Server")
+    parser.add_argument("--exportdir", type=str, default=os.path.expanduser("~/.mcp-dblp/exports"),
+                        help="Directory to export BibTeX files to")
+    args = parser.parse_args()
+    
     logger.info(f"Starting MCP-DBLP server with version: {version_str}")
     try:
-        asyncio.run(serve())
+        asyncio.run(serve(export_dir=args.exportdir))
         return 0
     except KeyboardInterrupt:
         logger.info("Server stopped by user")

@@ -1,3 +1,4 @@
+
 # MCP-DBLP
 
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Python Version](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
@@ -15,6 +16,7 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
 - Perform fuzzy matching on publication titles and author names
 - Extract and format bibliographic information
 - Process embedded references in documents
+- Direct BibTeX export that bypasses LLM processing for maximum accuracy
 
 ## Features
 
@@ -23,6 +25,7 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
 - BibTeX entry retrieval directly from DBLP
 - Publication filtering by year and venue
 - Statistical analysis of publication data
+- Direct BibTeX export capability that bypasses LLM processing for maximum accuracy
 
 ## Available Tools
 
@@ -33,6 +36,7 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
 | `get_author_publications` | Retrieve publications for a specific author        |
 | `get_venue_info`          | Get detailed information about a publication venue |
 | `calculate_statistics`    | Generate statistics from publication results       |
+| `export_bibtex`           | Export BibTeX entries directly from DBLP to files  |
 
 
 ## Feedback
@@ -60,23 +64,23 @@ Provide feedback to the author via this [form](https://form.jotform.com/szeider/
    uv pip install -e .  
    ```
 
-3. Create the configuration file:
+1. Create the configuration file:
 
    For macOS/Linux:
 
-   ```bash
+```
    ~/Library/Application/Support/Claude/claude_desktop_config.json
-   ```
+```
 
    For Windows:
 
-   ```bash
+```
    %APPDATA%\Claude\claude_desktop_config.json
-   ```
+```
 
    Add the following content:
 
-   ```json
+```
    {
      "mcpServers": {
        "mcp-dblp": {
@@ -85,20 +89,21 @@ Provide feedback to the author via this [form](https://form.jotform.com/szeider/
            "--directory",
            "/absolute/path/to/mcp-dblp/",
            "run",
-           "mcp-dblp"
+           "mcp-dblp",
+           "--exportdir",
+           "/absolute/path/to/bibtex/export/folder/"
          ]
        }
      }
    }
-   ```
-
-   Windows: ```C:\\absolute\\path\\to\\mcp-dblp```
+```
+Windows: `C:\\absolute\\path\\to\\mcp-dblp`
 
 ------
 
 ## Prompt
 
-Incuded is an [instructions prompt](./instructions_prompt.md) which shoudl be issued togther with the text conatining citations. On Claude Desktop, the instructions prompt is available via the electrical plug icon. 
+Incuded is an [instructions prompt](./instructions_prompt.md) which shoudl be issued togther with the text conatining citations. On Claude Desktop, the instructions prompt is available via the electrical plug icon.
 
 ## Tool Details
 
@@ -156,19 +161,47 @@ Calculate statistics from a list of publication results.
 
 - `results` (array, required): An array of publication objects, each with at least 'title', 'authors', 'venue', and 'year'
 
+### export_bibtex
+
+Export BibTeX entries directly from DBLP to a local file.
+
+**Parameters:**
+
+- ```
+  links
+  ```
+
+   
+
+  (string, required): HTML string containing one or more <a href=biburl>key</a> links
+
+  - Example: `"<a href=https://dblp.org/rec/journals/example.bib>Smith2023</a>"`
+
+**Behavior:**
+
+- For each link, the BibTeX entry is fetched directly from DBLP
+- Only the citation key is replaced with the key specified in the link text
+- All entries are saved to a timestamped .bib file in the folder specified by `--exportdir`
+- Returns the full path to the saved file
+
+**Important Note:** The BibTeX entries are fetched directly from DBLP with a 10-second timeout protection and are not processed, modified, or hallucinated by the LLM. This ensures maximum accuracy and trustworthiness of the bibliographic data. Only the citation keys are modified as specified. If a request times out, an error message is included in the output.
+
 ------
 
 ## Example
 
 ### Input text:
 
-> Our exploration focuses on two types of explanation problems, abductive and contrastive, in local and global contexts (Marques-Silva 2023). Abductive explanations (Ignatiev, Narodytska, and Marques-Silva 2019), corresponding to prime-implicant explanations (Shih, Choi, and Darwiche 2018) and sufficient reason explanations (Darwiche and Ji 2022), clarify specific decision-making instances, while contrastive explanations (Miller 2019; Ignatiev et al. 2020), corresponding to necessary reason explanations (Darwiche and Ji 2022), make explicit the reasons behind the non-selection of alternatives. Conversely, global explanations (Ribeiro, Singh, and Guestrin 2016; Ignatiev, Narodytska, and Marques-Silva 2019) aim to unravel models’ decision patterns across various inputs.
+> Our exploration focuses on two types of explanation problems, abductive and contrastive, in local and global contexts (Marques-Silva 2023). Abductive explanations (Ignatiev, Narodytska, and Marques-Silva 2019), corresponding to prime-implicant explanations (Shih, Choi, and Darwiche 2018) and sufficient reason explanations (Darwiche and Ji 2022), clarify specific decision-making instances, while contrastive explanations (Miller 2019; Ignatiev et al. 2020), corresponding to necessary reason explanations (Darwiche and Ji 2022), make explicit the reasons behind the non-selection of alternatives. Conversely, global explanations (Ribeiro, Singh, and Guestrin 2016; Ignatiev, Narodytska, and Marques-Silva 2019) aim to unravel models' decision patterns across various inputs.
 
 ### Output text:
 
 > Our exploration focuses on two types of explanation problems, abductive and contrastive, in local and global contexts \cite{MarquesSilvaI23}. Abductive explanations \cite{IgnatievNM19}, corresponding to prime-implicant explanations \cite{ShihCD18} and sufficient reason explanations \cite{DarwicheJ22}, clarify specific decision-making instances, while contrastive explanations \cite{Miller19}; \cite{IgnatievNA020}, corresponding to necessary reason explanations \cite{DarwicheJ22}, make explicit the reasons behind the non-selection of alternatives. Conversely, global explanations \cite{Ribeiro0G16}; \cite{IgnatievNM19} aim to unravel models' decision patterns across various inputs.
 
 ### Output Bibtex
+
+> All references have been successfully exported to a BibTeX file at: /absolute/path/to/bibtex/20250305_231431.bib
+
 ```
 @article{MarquesSilvaI23,
  author       = {Jo{\~{a}}o Marques{-}Silva and
@@ -303,6 +336,7 @@ Calculate statistics from a list of publication results.
  bibsource    = {dblp computer science bibliography, https://dblp.org}
 }
 ```
+
 ------
 
 ## Disclaimer
@@ -316,3 +350,4 @@ This MCP-DBLP is in its prototype stage and should be used with caution. Users a
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ------
+

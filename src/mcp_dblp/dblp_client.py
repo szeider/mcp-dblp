@@ -9,6 +9,9 @@ import re
 
 logger = logging.getLogger("dblp_client")
 
+# Default timeout for all HTTP requests
+REQUEST_TIMEOUT = 10  # seconds
+
 def _fetch_publications(single_query: str, max_results: int) -> List[Dict[str, Any]]:
     """Helper function to fetch publications for a single query string."""
     results = []
@@ -19,7 +22,7 @@ def _fetch_publications(single_query: str, max_results: int) -> List[Dict[str, A
             "format": "json",
             "h": max_results
         }
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         data = response.json()
         hits = data.get("result", {}).get("hits", {})
@@ -65,6 +68,16 @@ def _fetch_publications(single_query: str, max_results: int) -> List[Dict[str, A
                     "dblp_key": dblp_key  # Use more specific name for the DBLP key
                 }
                 results.append(result)
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout error searching DBLP after {REQUEST_TIMEOUT} seconds")
+        # Provide timeout error information
+        results.append({
+            "title": f"ERROR: Query '{single_query}' timed out after {REQUEST_TIMEOUT} seconds",
+            "authors": [],
+            "venue": "Error",
+            "year": None,
+            "error": f"Timeout after {REQUEST_TIMEOUT} seconds"
+        })
     except Exception as e:
         logger.error(f"Error searching DBLP: {e}")
         # Provide mock results on error.
@@ -309,6 +322,32 @@ def fuzzy_title_search(title: str, similarity_threshold: float, max_results: int
     
     return filtered
 
+def fetch_and_process_bibtex(url, new_key):
+    """
+    Fetch BibTeX from URL and replace the key with new_key.
+    
+    Parameters:
+        url (str): URL to the BibTeX file
+        new_key (str): New citation key to replace the original one
+        
+    Returns:
+        str: BibTeX content with replaced citation key, or error message
+    """
+    try:
+        response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        bibtex = response.text
+        
+        # Replace the key in format @TYPE{KEY, ... -> @TYPE{new_key, ...
+        bibtex = re.sub(r'@(\w+){([^,]+),', r'@\1{' + new_key + ',', bibtex, 1)
+        return bibtex
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout fetching {url} after {REQUEST_TIMEOUT} seconds")
+        return f"% Error: Timeout fetching {url} after {REQUEST_TIMEOUT} seconds"
+    except Exception as e:
+        logger.error(f"Error fetching {url}: {str(e)}", exc_info=True)
+        return f"% Error fetching {url}: {str(e)}"
+
 def fetch_bibtex_entry(dblp_key: str) -> str:
     """
     Fetch BibTeX entry from DBLP by key.
@@ -343,7 +382,7 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
         # Try each URL until one works
         for url in urls_to_try:
             logger.info(f"Fetching BibTeX from: {url}")
-            response = requests.get(url)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT)
             logger.info(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
@@ -391,6 +430,9 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
         logger.warning(f"Failed to fetch BibTeX for key: {dblp_key} after trying multiple URL formats")
         return ""
             
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout fetching BibTeX for {dblp_key} after {REQUEST_TIMEOUT} seconds")
+        return f"% Error: Timeout fetching BibTeX for {dblp_key} after {REQUEST_TIMEOUT} seconds"
     except Exception as e:
         logger.error(f"Error fetching BibTeX for {dblp_key}: {str(e)}", exc_info=True)
         return ""
