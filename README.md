@@ -103,7 +103,8 @@ Windows: `C:\\absolute\\path\\to\\mcp-dblp`
 
 ## Prompt
 
-Incuded is an [instructions prompt](./instructions_prompt.md) which shoudl be issued togther with the text conatining citations. On Claude Desktop, the instructions prompt is available via the electrical plug icon.
+Included is an [instructions prompt](./instructions_prompt.md) which should be used together with the text containing citations. On Claude Desktop, the instructions prompt is available via the electrical plug icon.
+
 
 ## Tool Details
 
