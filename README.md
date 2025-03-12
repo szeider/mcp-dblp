@@ -1,9 +1,12 @@
-
 # MCP-DBLP
 
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Python Version](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 
 A Model Context Protocol (MCP) server that provides access to the DBLP computer science bibliography database for Large Language Models.
+
+<a href="https://glama.ai/mcp/servers/cm42scf3iv">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/cm42scf3iv/badge" alt="MCP-DBLP MCP server" />
+</a>
 
 ------
 
@@ -351,4 +354,3 @@ This MCP-DBLP is in its prototype stage and should be used with caution. Users a
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ------
-
