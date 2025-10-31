@@ -4,16 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-dblp"
-version = "1.1.0"
+version = "1.1.1"
 description = "An MCP server that allows you to search the DBLP computer sceince bibliography."
 authors = [
     {name = "Stefan Szeider", email = "stefan@szeider.net", url = "https://www.ac.tuwien.ac.at/people/szeider/"}
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.2.0",
-    "requests>=2.32.3",
-    "pandas>=2.2.3"
+    "mcp>=1.20.0",
+    "requests>=2.32.5"
 ]
 
 [project.scripts]
@@ -26,5 +25,35 @@ line-length = 88
 python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "T20",   # flake8-print (detect print statements)
+    "SIM",   # flake8-simplify
+]
+ignore = [
+    "E501",  # Line too long (let formatter handle it)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**/*.py" = ["T20"]  # Allow print statements in tests
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "ruff>=0.14.2",
+]
 
 

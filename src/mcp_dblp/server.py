@@ -6,34 +6,30 @@ Removing or renaming this function will break package imports and cause an error
   ImportError: cannot import name 'main' from 'mcp_dblp.server'
 """
 
-
-
-import sys
-import asyncio
-import logging
-from typing import List, Dict, Any, Optional
-import os
-from pathlib import Path
-import re
-import datetime
-import requests
 import argparse
+import asyncio
+import datetime
+import logging
+import os
+import re
+import sys
+from pathlib import Path
 
-# Import MCP SDK
-from mcp.server import Server, NotificationOptions
-from mcp.server.models import InitializationOptions
 import mcp.server.stdio
 import mcp.types as types
 
+# Import MCP SDK
+from mcp.server import NotificationOptions, Server
+from mcp.server.models import InitializationOptions
+
 # Import DBLP client functions
 from mcp_dblp.dblp_client import (
-    search, 
-    add_ccf_class, 
-    get_author_publications, 
-    get_venue_info, 
     calculate_statistics,
+    fetch_and_process_bibtex,
     fuzzy_title_search,
-    fetch_and_process_bibtex  
+    get_author_publications,
+    get_venue_info,
+    search,
 )
 
 # Set up logging
@@ -43,17 +39,15 @@ log_file = os.path.join(log_dir, "mcp_dblp_server.log")
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stderr)
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger("mcp_dblp")
 
 
 try:
     from importlib.metadata import version
+
     version_str = version("mcp-dblp")
     logger.info(f"Loaded version: {version_str}")
 except Exception:
@@ -61,78 +55,97 @@ except Exception:
     logger.warning(f"Using default version: {version_str}")
 
 
-
 def parse_html_links(html_string):
     """Parse HTML links of the form <a href=biburl>key</a> and extract URLs and keys."""
-    pattern = r'<a\s+href=([^>]+)>([^<]+)</a>'
+    pattern = r"<a\s+href=([^>]+)>([^<]+)</a>"
     matches = re.findall(pattern, html_string)
     result = []
     for url, key in matches:
-        url = url.strip('"\'')
+        url = url.strip("\"'")
         key = key.strip()
         result.append((url, key))
     return result
 
 
-
 def export_bibtex_entries(entries, export_dir):
     """Export BibTeX entries to a file with timestamp filename."""
     os.makedirs(export_dir, exist_ok=True)
-    
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}.bib"
     filepath = os.path.join(export_dir, filename)
-    
-    with open(filepath, 'w', encoding='utf-8') as f:
+
+    with open(filepath, "w", encoding="utf-8") as f:
         for entry in entries:
             f.write(entry + "\n\n")
-    
+
     return filepath
+
 
 async def serve(export_dir=None) -> None:
     """Main server function to handle MCP requests"""
     if export_dir is None:
         export_dir = os.path.expanduser("~/.mcp-dblp/exports")
-    
+
     server = Server("mcp-dblp")
-    server.capabilities = {}
 
     # Provide a list of available prompts including our instructions prompt.
     @server.list_prompts()
-    async def handle_list_prompts() -> List[types.Prompt]:
+    async def handle_list_prompts() -> list[types.Prompt]:
         return [
             types.Prompt(
-                name="MCP-DBLP Instructions",
-                description="Basic instructions for using the DBLP tools; get this prompt before any interaction with MCP-DBLP.",
-                arguments=[]
+                name="dblp-instructions",
+                description="Instructions for using DBLP tools efficiently with batch/parallel calls for citation processing",
+                arguments=[],
             )
         ]
 
     # Get prompt endpoint that loads our instructions from a file.
     @server.get_prompt()
-    async def handle_get_prompt(name: str, arguments: Optional[dict] = None) -> types.GetPromptResult:
+    async def handle_get_prompt(name: str, arguments: dict | None = None) -> types.GetPromptResult:
         try:
             # Assume instructions_prompt.md is located at the project root
             instructions_path = Path(__file__).resolve().parents[2] / "instructions_prompt.md"
-            with open(instructions_path, "r", encoding="utf-8") as f:
+            with open(instructions_path, encoding="utf-8") as f:
                 instructions_prompt = f.read()
         except Exception as e:
             instructions_prompt = f"Error loading instructions prompt: {e}"
         return types.GetPromptResult(
-            description="MCP-DBLP Instructions",
+            description="Instructions for using DBLP tools efficiently with batch/parallel calls for citation processing",
             messages=[
                 types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(
-                        type="text",
-                        text=instructions_prompt
-                    )
+                    role="user", content=types.TextContent(type="text", text=instructions_prompt)
                 )
-            ]
+            ],
         )
 
+    # Expose instructions as a resource so it appears in ListMcpResourcesTool
+    @server.list_resources()
+    async def handle_list_resources() -> list[types.Resource]:
+        return [
+            types.Resource(
+                uri="dblp://instructions",
+                name="DBLP Citation Processing Instructions",
+                description="Complete instructions for using DBLP tools efficiently with batch/parallel calls",
+                mimeType="text/markdown",
+            )
+        ]
+
+    @server.read_resource()
+    async def handle_read_resource(uri: str) -> str:
+        uri_str = str(uri) if not isinstance(uri, str) else uri
+        if uri_str == "dblp://instructions":
+            try:
+                instructions_path = Path(__file__).resolve().parents[2] / "instructions_prompt.md"
+                with open(instructions_path, encoding="utf-8") as f:
+                    return f.read()
+            except Exception as e:
+                return f"Error loading instructions: {e}"
+        else:
+            raise ValueError(f"Unknown resource URI: {uri_str}")
+
     @server.list_tools()
-    async def list_tools() -> List[types.Tool]:
+    async def list_tools() -> list[types.Tool]:
         """List all available DBLP tools with detailed descriptions."""
         return [
             types.Tool(
@@ -157,10 +170,10 @@ async def serve(export_dir=None) -> None:
                         "year_from": {"type": "number"},
                         "year_to": {"type": "number"},
                         "venue_filter": {"type": "string"},
-                        "include_bibtex": {"type": "boolean"}
+                        "include_bibtex": {"type": "boolean"},
                     },
-                    "required": ["query"]
-                }
+                    "required": ["query"],
+                },
             ),
             types.Tool(
                 name="fuzzy_title_search",
@@ -185,10 +198,10 @@ async def serve(export_dir=None) -> None:
                         "year_from": {"type": "number"},
                         "year_to": {"type": "number"},
                         "venue_filter": {"type": "string"},
-                        "include_bibtex": {"type": "boolean"}
+                        "include_bibtex": {"type": "boolean"},
                     },
-                    "required": ["title", "similarity_threshold"]
-                }
+                    "required": ["title", "similarity_threshold"],
+                },
             ),
             types.Tool(
                 name="get_author_publications",
@@ -207,10 +220,10 @@ async def serve(export_dir=None) -> None:
                         "author_name": {"type": "string"},
                         "similarity_threshold": {"type": "number"},
                         "max_results": {"type": "number"},
-                        "include_bibtex": {"type": "boolean"}
+                        "include_bibtex": {"type": "boolean"},
                     },
-                    "required": ["author_name", "similarity_threshold"]
-                }
+                    "required": ["author_name", "similarity_threshold"],
+                },
             ),
             types.Tool(
                 name="get_venue_info",
@@ -223,11 +236,9 @@ async def serve(export_dir=None) -> None:
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {
-                        "venue_name": {"type": "string"}
-                    },
-                    "required": ["venue_name"]
-                }
+                    "properties": {"venue_name": {"type": "string"}},
+                    "required": ["venue_name"],
+                },
             ),
             types.Tool(
                 name="calculate_statistics",
@@ -243,11 +254,9 @@ async def serve(export_dir=None) -> None:
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {
-                        "results": {"type": "array"}
-                    },
-                    "required": ["results"]
-                }
+                    "properties": {"results": {"type": "array"}},
+                    "required": ["results"],
+                },
             ),
             types.Tool(
                 name="export_bibtex",
@@ -257,9 +266,9 @@ async def serve(export_dir=None) -> None:
                     "  - links (string, required): HTML string containing one or more <a href=biburl>key</a> links.\n"
                     "    The href attribute should contain a URL to a BibTeX file, and the link text is used as the citation key.\n"
                     "    Example input with three links:\n"
-                    "    \"<a href=https://dblp.org/rec/journals/example1.bib>Smith2023</a>\n"
+                    '    "<a href=https://dblp.org/rec/journals/example1.bib>Smith2023</a>\n'
                     "     <a href=https://dblp.org/rec/conf/example2.bib>Jones2022</a>\n"
-                    "     <a href=https://dblp.org/rec/journals/example3.bib>Brown2021</a>\"\n"
+                    '     <a href=https://dblp.org/rec/journals/example3.bib>Brown2021</a>"\n'
                     "Process:\n"
                     "  - For each link, the tool fetches the BibTeX content from the URL\n"
                     "  - The citation key in each BibTeX entry is replaced with the key from the link text\n"
@@ -269,26 +278,25 @@ async def serve(export_dir=None) -> None:
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {
-                        "links": {"type": "string"}
-                    },
-                    "required": ["links"]
-                }
-            )
+                    "properties": {"links": {"type": "string"}},
+                    "required": ["links"],
+                },
+            ),
         ]
 
     @server.call_tool()
-    async def handle_call_tool(name: str, arguments: dict) -> List[types.TextContent]:
+    async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         """Handle tool calls from clients"""
         try:
             logger.info(f"Tool call: {name} with arguments {arguments}")
             match name:
                 case "search":
                     if "query" not in arguments:
-                        return [types.TextContent(
-                            type="text",
-                            text="Error: Missing required parameter 'query'"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text", text="Error: Missing required parameter 'query'"
+                            )
+                        ]
                     include_bibtex = arguments.get("include_bibtex", False)
                     result = search(
                         query=arguments.get("query"),
@@ -296,24 +304,30 @@ async def serve(export_dir=None) -> None:
                         year_from=arguments.get("year_from"),
                         year_to=arguments.get("year_to"),
                         venue_filter=arguments.get("venue_filter"),
-                        include_bibtex=include_bibtex
+                        include_bibtex=include_bibtex,
                     )
                     if include_bibtex:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Found {len(result)} publications matching your query:\n\n{format_results_with_bibtex(result)}"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Found {len(result)} publications matching your query:\n\n{format_results_with_bibtex(result)}",
+                            )
+                        ]
                     else:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Found {len(result)} publications matching your query:\n\n{format_results(result)}"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Found {len(result)} publications matching your query:\n\n{format_results(result)}",
+                            )
+                        ]
                 case "fuzzy_title_search":
                     if "title" not in arguments or "similarity_threshold" not in arguments:
-                        return [types.TextContent(
-                            type="text",
-                            text="Error: Missing required parameter 'title' or 'similarity_threshold'"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="Error: Missing required parameter 'title' or 'similarity_threshold'",
+                            )
+                        ]
                     include_bibtex = arguments.get("include_bibtex", False)
                     result = fuzzy_title_search(
                         title=arguments.get("title"),
@@ -322,110 +336,119 @@ async def serve(export_dir=None) -> None:
                         year_from=arguments.get("year_from"),
                         year_to=arguments.get("year_to"),
                         venue_filter=arguments.get("venue_filter"),
-                        include_bibtex=include_bibtex
+                        include_bibtex=include_bibtex,
                     )
                     if include_bibtex:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Found {len(result)} publications with similar titles:\n\n{format_results_with_similarity_and_bibtex(result)}"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Found {len(result)} publications with similar titles:\n\n{format_results_with_similarity_and_bibtex(result)}",
+                            )
+                        ]
                     else:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Found {len(result)} publications with similar titles:\n\n{format_results_with_similarity(result)}"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Found {len(result)} publications with similar titles:\n\n{format_results_with_similarity(result)}",
+                            )
+                        ]
                 case "get_author_publications":
                     if "author_name" not in arguments or "similarity_threshold" not in arguments:
-                        return [types.TextContent(
-                            type="text",
-                            text="Error: Missing required parameter 'author_name' or 'similarity_threshold'"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="Error: Missing required parameter 'author_name' or 'similarity_threshold'",
+                            )
+                        ]
                     include_bibtex = arguments.get("include_bibtex", False)
                     result = get_author_publications(
                         author_name=arguments.get("author_name"),
                         similarity_threshold=arguments.get("similarity_threshold"),
                         max_results=arguments.get("max_results", 20),
-                        include_bibtex=include_bibtex
+                        include_bibtex=include_bibtex,
                     )
                     pub_count = result.get("publication_count", 0)
                     publications = result.get("publications", [])
-                    
+
                     if include_bibtex:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Found {pub_count} publications for author {arguments['author_name']}:\n\n{format_results_with_bibtex(publications)}"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Found {pub_count} publications for author {arguments['author_name']}:\n\n{format_results_with_bibtex(publications)}",
+                            )
+                        ]
                     else:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Found {pub_count} publications for author {arguments['author_name']}:\n\n{format_results(publications)}"
-                        )]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Found {pub_count} publications for author {arguments['author_name']}:\n\n{format_results(publications)}",
+                            )
+                        ]
                 case "get_venue_info":
                     if "venue_name" not in arguments:
-                        return [types.TextContent(
+                        return [
+                            types.TextContent(
+                                type="text", text="Error: Missing required parameter 'venue_name'"
+                            )
+                        ]
+                    result = get_venue_info(venue_name=arguments.get("venue_name"))
+                    return [
+                        types.TextContent(
                             type="text",
-                            text="Error: Missing required parameter 'venue_name'"
-                        )]
-                    result = get_venue_info(
-                        venue_name=arguments.get("venue_name")
-                    )
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Venue information for {arguments['venue_name']}:\n\n{format_dict(result)}"
-                    )]
+                            text=f"Venue information for {arguments['venue_name']}:\n\n{format_dict(result)}",
+                        )
+                    ]
                 case "calculate_statistics":
                     if "results" not in arguments:
-                        return [types.TextContent(
-                            type="text",
-                            text="Error: Missing required parameter 'results'"
-                        )]
-                    result = calculate_statistics(
-                        results=arguments.get("results")
-                    )
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Statistics calculated:\n\n{format_dict(result)}"
-                    )]
+                        return [
+                            types.TextContent(
+                                type="text", text="Error: Missing required parameter 'results'"
+                            )
+                        ]
+                    result = calculate_statistics(results=arguments.get("results"))
+                    return [
+                        types.TextContent(
+                            type="text", text=f"Statistics calculated:\n\n{format_dict(result)}"
+                        )
+                    ]
                 case "export_bibtex":
                     if "links" not in arguments:
-                        return [types.TextContent(
-                            type="text",
-                            text="Error: Missing required parameter 'links'"
-                        )]
-                    
+                        return [
+                            types.TextContent(
+                                type="text", text="Error: Missing required parameter 'links'"
+                            )
+                        ]
+
                     html_links = arguments.get("links")
                     links = parse_html_links(html_links)
-                    
+
                     if not links:
-                        return [types.TextContent(
-                            type="text",
-                            text="Error: No valid links found in the input"
-                        )]
-                    
+                        return [
+                            types.TextContent(
+                                type="text", text="Error: No valid links found in the input"
+                            )
+                        ]
+
                     # Fetch and process BibTeX entries
                     bibtex_entries = []
                     for url, key in links:
                         bibtex = fetch_and_process_bibtex(url, key)
                         bibtex_entries.append(bibtex)
-                    
+
                     # Export to file
                     filepath = export_bibtex_entries(bibtex_entries, export_dir)
-                    
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Exported {len(bibtex_entries)} BibTeX entries to {filepath}"
-                    )]
+
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Exported {len(bibtex_entries)} BibTeX entries to {filepath}",
+                        )
+                    ]
                 case _:
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Unknown tool: {name}"
-                    )]
+                    return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
         except Exception as e:
             logger.error(f"Tool execution failed: {str(e)}", exc_info=True)
-            return [types.TextContent(
-                type="text",
-                text=f"Error executing {name}: {str(e)}"
-            )]
+            return [types.TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
 
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await server.run(
@@ -441,6 +464,7 @@ async def serve(export_dir=None) -> None:
             ),
         )
 
+
 def format_results(results):
     if not results:
         return "No results found."
@@ -450,11 +474,12 @@ def format_results(results):
         authors = ", ".join(result.get("authors", []))
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
-        formatted.append(f"{i+1}. {title}")
+        formatted.append(f"{i + 1}. {title}")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
         formatted.append("")
     return "\n".join(formatted)
+
 
 def format_results_with_similarity(results):
     if not results:
@@ -466,11 +491,12 @@ def format_results_with_similarity(results):
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
         similarity = result.get("similarity", 0.0)
-        formatted.append(f"{i+1}. {title} [Similarity: {similarity:.2f}]")
+        formatted.append(f"{i + 1}. {title} [Similarity: {similarity:.2f}]")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
         formatted.append("")
     return "\n".join(formatted)
+
 
 def format_results_with_bibtex(results):
     if not results:
@@ -481,15 +507,16 @@ def format_results_with_bibtex(results):
         authors = ", ".join(result.get("authors", []))
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
-        formatted.append(f"{i+1}. {title}")
+        formatted.append(f"{i + 1}. {title}")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
         if "bibtex" in result and result["bibtex"]:
             formatted.append("\n   BibTeX:")
-            bibtex_lines = result["bibtex"].strip().split('\n')
+            bibtex_lines = result["bibtex"].strip().split("\n")
             formatted.append("      " + "\n      ".join(bibtex_lines))
         formatted.append("")
     return "\n".join(formatted)
+
 
 def format_results_with_similarity_and_bibtex(results):
     if not results:
@@ -501,15 +528,16 @@ def format_results_with_similarity_and_bibtex(results):
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
         similarity = result.get("similarity", 0.0)
-        formatted.append(f"{i+1}. {title} [Similarity: {similarity:.2f}]")
+        formatted.append(f"{i + 1}. {title} [Similarity: {similarity:.2f}]")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
         if "bibtex" in result and result["bibtex"]:
             formatted.append("\n   BibTeX:")
-            bibtex_lines = result["bibtex"].strip().split('\n')
+            bibtex_lines = result["bibtex"].strip().split("\n")
             formatted.append("      " + "\n      ".join(bibtex_lines))
         formatted.append("")
     return "\n".join(formatted)
+
 
 def format_dict(data):
     formatted = []
@@ -517,12 +545,17 @@ def format_dict(data):
         formatted.append(f"{key}: {value}")
     return "\n".join(formatted)
 
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP-DBLP Server")
-    parser.add_argument("--exportdir", type=str, default=os.path.expanduser("~/.mcp-dblp/exports"),
-                        help="Directory to export BibTeX files to")
+    parser.add_argument(
+        "--exportdir",
+        type=str,
+        default=os.path.expanduser("~/.mcp-dblp/exports"),
+        help="Directory to export BibTeX files to",
+    )
     args = parser.parse_args()
-    
+
     logger.info(f"Starting MCP-DBLP server with version: {version_str}")
     try:
         asyncio.run(serve(export_dir=args.exportdir))
@@ -533,6 +566,7 @@ def main() -> int:
     except Exception as e:
         logger.error(f"Server error: {str(e)}", exc_info=True)
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

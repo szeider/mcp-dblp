@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# macOS
+.DS_Store
+
+# Project-specific (development artifacts not tracked in git)
+CLAUDE.md
+test/
+paper/
