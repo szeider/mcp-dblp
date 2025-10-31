@@ -25,12 +25,32 @@ You are given a text with embedded references in some format, for instance (auth
 
 ## Search Strategy
 
-When searching for citations, begin with author name and year. If that doesn't yield results, progressively increase specificity by:
+### Best Practices for Finding Papers
 
-1. Adding keywords from the paper title
-2. Searching for the complete or partial title in quotes
-3. Including the venue or journal name if available
-4. Trying different name formats for the authors (full name, last name only)
+**For most reliable results, use author name + year in your query:**
+- ✅ Good: `search("Vaswani 2017")` or `search("author:Vaswani year:2017")`
+- ✅ Good: `search("Attention is All You Need Vaswani")`
+- ⚠️ Less reliable: `search("Attention is All You Need")` (may return derivative papers first)
+
+**Why this matters:** DBLP's search ranking doesn't always prioritize the original paper when searching by title alone. Adding author name or year dramatically improves result quality.
+
+### Progressive Search Strategy
+
+When searching for citations, use this progression:
+
+1. **Start with author + year**: `search("Smith 2023")` or `search("author:Smith year:2023")`
+2. **Add title keywords**: `search("Smith transformer 2023")`
+3. **Try fuzzy_title_search with author hint**: If you know the exact title, use `fuzzy_title_search("Attention is All You Need", similarity_threshold=0.7)` but note that adding author/year to the title helps significantly
+4. **Use get_author_publications**: For specific authors, `get_author_publications("Yoshua Bengio", similarity_threshold=0.8)` retrieves their papers directly
+5. **Try different name formats**: Try full name, last name only, or name variations
+
+### Tool Selection Guide
+
+- **search()**: Best for author+year, keywords, or general queries. Supports boolean operators (AND, OR)
+- **fuzzy_title_search()**: Use when you have the exact title. Works best when DBLP ranking is good, but has been improved to try multiple year ranges automatically
+- **get_author_publications()**: Best for retrieving all papers by a specific author with fuzzy name matching
+
+### When to Give Up
 
 Only mark a citation as [CITATION NOT FOUND] after attempting at least 3 different search queries with varying levels of specificity. For important citations that seem to be missing, consider asking the user for more detailed information about the reference.
 

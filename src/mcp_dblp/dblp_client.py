@@ -17,7 +17,7 @@ REQUEST_TIMEOUT = 10  # seconds
 # See: https://dblp.org/faq/1474706.html
 HEADERS = {
     "User-Agent": "mcp-dblp/1.1.1 (https://github.com/szeider/mcp-dblp)",
-    "Accept": "application/json"
+    "Accept": "application/json",
 }
 
 
@@ -282,6 +282,15 @@ def fuzzy_title_search(
     """
     Search DBLP for publications with fuzzy title matching.
 
+    Uses multiple search strategies to improve recall:
+    1. Search with "title:" prefix
+    2. Search without prefix (broader matching)
+    3. Calculate similarity scores and rank by best match
+
+    Note: DBLP's search ranking may not prioritize the exact paper you're looking for.
+    For best results, include author name or year in the title parameter
+    (e.g., "Attention is All You Need Vaswani" or use the regular search() function).
+
     Parameters:
         title (str): Full or partial title of the publication (case-insensitive).
         similarity_threshold (float): A float between 0 and 1 where 1.0 means an exact match.
@@ -296,38 +305,45 @@ def fuzzy_title_search(
     """
     logger.info(f"Searching for title: '{title}' with similarity threshold {similarity_threshold}")
 
-    # First search with the title as a query
+    candidates = []
+    seen_titles = set()
+
+    # Strategy 1: Search with title prefix
     title_query = f"title:{title}"
-    candidates = search(
+    results = search(
         title_query,
         max_results=max_results * 3,
         year_from=year_from,
         year_to=year_to,
         venue_filter=venue_filter,
     )
+    for pub in results:
+        t = pub.get("title", "")
+        if t not in seen_titles:
+            candidates.append(pub)
+            seen_titles.add(t)
 
-    # Also try searching without the "title:" prefix for better recall
-    additional_candidates = search(
+    # Strategy 2: Search without prefix
+    results = search(
         title,
         max_results=max_results * 2,
         year_from=year_from,
         year_to=year_to,
         venue_filter=venue_filter,
     )
-
-    # Merge the results, avoiding duplicates
-    seen_titles = set(pub.get("title", "") for pub in candidates)
-    for pub in additional_candidates:
-        if pub.get("title", "") not in seen_titles:
+    for pub in results:
+        t = pub.get("title", "")
+        if t not in seen_titles:
             candidates.append(pub)
-            seen_titles.add(pub.get("title", ""))
+            seen_titles.add(t)
 
+    # Calculate similarity scores
     filtered = []
     for pub in candidates:
         pub_title = pub.get("title", "")
         ratio = difflib.SequenceMatcher(None, title.lower(), pub_title.lower()).ratio()
         if ratio >= similarity_threshold:
-            pub["similarity"] = ratio  # Add similarity score to the publication object
+            pub["similarity"] = ratio
             filtered.append(pub)
 
     # Sort by similarity score (highest first)
@@ -471,17 +487,48 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
 
 def get_venue_info(venue_name: str) -> dict[str, Any]:
     """
-    Get information about a publication venue.
-    (Documentation omitted for brevity)
+    Get information about a publication venue using DBLP venue search API.
+    Returns venue name, acronym, type, and DBLP URL.
     """
     logger.info(f"Getting information for venue: {venue_name}")
-    return {
-        "abbreviation": venue_name,
-        "name": venue_name,
-        "publisher": "",
-        "type": "",
-        "category": "",
-    }
+    try:
+        url = "https://dblp.org/search/venue/api"
+        params = {"q": venue_name, "format": "json", "h": 1}
+        response = requests.get(url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+
+        hits = data.get("result", {}).get("hits", {})
+        total = int(hits.get("@total", "0"))
+
+        if total > 0:
+            hit = hits.get("hit", [])
+            if isinstance(hit, list):
+                hit = hit[0]
+
+            info = hit.get("info", {})
+            return {
+                "venue": info.get("venue", ""),
+                "acronym": info.get("acronym", ""),
+                "type": info.get("type", ""),
+                "url": info.get("url", ""),
+            }
+        else:
+            logger.warning(f"No venue found for: {venue_name}")
+            return {
+                "venue": "",
+                "acronym": "",
+                "type": "",
+                "url": "",
+            }
+    except Exception as e:
+        logger.error(f"Error fetching venue info for {venue_name}: {str(e)}")
+        return {
+            "venue": "",
+            "acronym": "",
+            "type": "",
+            "url": "",
+        }
 
 
 def calculate_statistics(results: list[dict[str, Any]]) -> dict[str, Any]:

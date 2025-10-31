@@ -228,11 +228,15 @@ async def serve(export_dir=None) -> None:
             types.Tool(
                 name="get_venue_info",
                 description=(
-                    "Retrieve detailed information about a publication venue.\n"
+                    "Retrieve information about a publication venue from DBLP.\n"
                     "Arguments:\n"
-                    "  - venue_name (string, required): Venue name or abbreviation (e.g., 'ICLR' or full name).\n"
-                    "Returns a dictionary with fields: abbreviation, name, publisher, type, and category.\n"
-                    "Note: Some fields may be empty if DBLP does not provide the information."
+                    "  - venue_name (string, required): Venue name or abbreviation (e.g., 'ICLR', 'NeurIPS', or full name).\n"
+                    "Returns a dictionary with fields:\n"
+                    "  - venue: Full venue title\n"
+                    "  - acronym: Venue acronym/abbreviation (if available)\n"
+                    "  - type: Venue type (e.g., 'Conference or Workshop', 'Journal', 'Repository')\n"
+                    "  - url: Canonical DBLP URL for the venue\n"
+                    "Note: Publisher, ISSN, and other metadata are not available through this endpoint."
                 ),
                 inputSchema={
                     "type": "object",
