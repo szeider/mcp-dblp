@@ -107,9 +107,9 @@ Then configure Claude Desktop with:
 
 ------
 
-## Prompt
+## Instructions
 
-Included is an [instructions prompt](./instructions_prompt.md) which should be used together with the text containing citations. On Claude Desktop, the instructions prompt is available via the electrical plug icon.
+Usage instructions are available via the `get_instructions` tool. Key workflow points are shown in the tool description; call the tool for complete details. See also [instructions_prompt.md](./instructions_prompt.md).
 
 
 ## Tool Details
