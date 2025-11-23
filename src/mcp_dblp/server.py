@@ -6,12 +6,9 @@ Removing or renaming this function will break package imports and cause an error
   ImportError: cannot import name 'main' from 'mcp_dblp.server'
 """
 
-import argparse
 import asyncio
-import datetime
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -55,99 +52,51 @@ except Exception:
     logger.warning(f"Using default version: {version_str}")
 
 
-def parse_html_links(html_string):
-    """Parse HTML links of the form <a href=biburl>key</a> and extract URLs and keys."""
-    pattern = r"<a\s+href=([^>]+)>([^<]+)</a>"
-    matches = re.findall(pattern, html_string)
-    result = []
-    for url, key in matches:
-        url = url.strip("\"'")
-        key = key.strip()
-        result.append((url, key))
-    return result
+def export_bibtex_entries(entries, path):
+    """Export BibTeX entries to a file at the specified path."""
+    # Ensure .bib extension
+    if not path.endswith(".bib"):
+        path = f"{path}.bib"
 
+    # Create parent directories if needed
+    parent_dir = os.path.dirname(path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
 
-def export_bibtex_entries(entries, export_dir):
-    """Export BibTeX entries to a file with timestamp filename."""
-    os.makedirs(export_dir, exist_ok=True)
-
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}.bib"
-    filepath = os.path.join(export_dir, filename)
-
-    with open(filepath, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for entry in entries:
             f.write(entry + "\n\n")
 
-    return filepath
+    return path
 
 
-async def serve(export_dir=None) -> None:
+async def serve() -> None:
     """Main server function to handle MCP requests"""
-    if export_dir is None:
-        export_dir = os.path.expanduser("~/.mcp-dblp/exports")
 
     server = Server("mcp-dblp")
 
-    # Provide a list of available prompts including our instructions prompt.
-    @server.list_prompts()
-    async def handle_list_prompts() -> list[types.Prompt]:
-        return [
-            types.Prompt(
-                name="dblp-instructions",
-                description="Instructions for using DBLP tools efficiently with batch/parallel calls for citation processing",
-                arguments=[],
-            )
-        ]
+    # Session-scoped buffer for BibTeX entries
+    # Key: citation_key, Value: full bibtex string
+    bibtex_buffer: dict[str, str] = {}
 
-    # Get prompt endpoint that loads our instructions from a file.
-    @server.get_prompt()
-    async def handle_get_prompt(name: str, arguments: dict | None = None) -> types.GetPromptResult:
-        try:
-            # Assume instructions_prompt.md is located at the project root
-            instructions_path = Path(__file__).resolve().parents[2] / "instructions_prompt.md"
-            with open(instructions_path, encoding="utf-8") as f:
-                instructions_prompt = f.read()
-        except Exception as e:
-            instructions_prompt = f"Error loading instructions prompt: {e}"
-        return types.GetPromptResult(
-            description="Instructions for using DBLP tools efficiently with batch/parallel calls for citation processing",
-            messages=[
-                types.PromptMessage(
-                    role="user", content=types.TextContent(type="text", text=instructions_prompt)
-                )
-            ],
-        )
-
-    # Expose instructions as a resource so it appears in ListMcpResourcesTool
-    @server.list_resources()
-    async def handle_list_resources() -> list[types.Resource]:
-        return [
-            types.Resource(
-                uri="dblp://instructions",
-                name="DBLP Citation Processing Instructions",
-                description="Complete instructions for using DBLP tools efficiently with batch/parallel calls",
-                mimeType="text/markdown",
-            )
-        ]
-
-    @server.read_resource()
-    async def handle_read_resource(uri: str) -> str:
-        uri_str = str(uri) if not isinstance(uri, str) else uri
-        if uri_str == "dblp://instructions":
-            try:
-                instructions_path = Path(__file__).resolve().parents[2] / "instructions_prompt.md"
-                with open(instructions_path, encoding="utf-8") as f:
-                    return f.read()
-            except Exception as e:
-                return f"Error loading instructions: {e}"
-        else:
-            raise ValueError(f"Unknown resource URI: {uri_str}")
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         """List all available DBLP tools with detailed descriptions."""
         return [
+            types.Tool(
+                name="get_instructions",
+                description=(
+                    "Get detailed DBLP usage instructions. Key points:\n"
+                    "- Batch searches in parallel (5-10 at a time) for efficiency\n"
+                    "- Add entries immediately after each search result (don't batch add_bibtex_entry calls)\n"
+                    "- Use author+year for best results: search('Vaswani 2017') not just title\n"
+                    "- Copy dblp_key EXACTLY from search results to add_bibtex_entry\n"
+                    "- Export once at the end with export_bibtex\n"
+                    "Call this tool for complete workflow details, search strategies, and examples."
+                ),
+                inputSchema={"type": "object", "properties": {}},
+            ),
             types.Tool(
                 name="search",
                 description=(
@@ -263,27 +212,47 @@ async def serve(export_dir=None) -> None:
                 },
             ),
             types.Tool(
-                name="export_bibtex",
+                name="add_bibtex_entry",
                 description=(
-                    "Export BibTeX entries from a collection of HTML hyperlinks.\n"
+                    "Add a BibTeX entry to the collection for later export. Call this once for each paper you want to export.\n"
                     "Arguments:\n"
-                    "  - links (string, required): HTML string containing one or more <a href=biburl>key</a> links.\n"
-                    "    The href attribute should contain a URL to a BibTeX file, and the link text is used as the citation key.\n"
-                    "    Example input with three links:\n"
-                    '    "<a href=https://dblp.org/rec/journals/example1.bib>Smith2023</a>\n'
-                    "     <a href=https://dblp.org/rec/conf/example2.bib>Jones2022</a>\n"
-                    '     <a href=https://dblp.org/rec/journals/example3.bib>Brown2021</a>"\n'
-                    "Process:\n"
-                    "  - For each link, the tool fetches the BibTeX content from the URL\n"
-                    "  - The citation key in each BibTeX entry is replaced with the key from the link text\n"
-                    "  - All entries are combined and saved to a .bib file with a timestamp filename\n"
-                    "Returns:\n"
-                    "  - A message with the full path to the saved .bib file"
+                    "  - dblp_key (string, required): The DBLP key from search results (e.g., 'conf/nips/VaswaniSPUJGKP17').\n"
+                    "  - citation_key (string, required): The citation key to use in the .bib file (e.g., 'Vaswani2017').\n"
+                    "Workflow:\n"
+                    "  1. Fetches BibTeX directly from DBLP using the provided key\n"
+                    "  2. Replaces the citation key with your custom key\n"
+                    "  3. Adds to collection (duplicate citation_key will be overwritten)\n"
+                    "  4. Returns count of entries currently in collection\n"
+                    "After adding all entries, call export_bibtex to save them to a .bib file."
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {"links": {"type": "string"}},
-                    "required": ["links"],
+                    "properties": {
+                        "dblp_key": {"type": "string"},
+                        "citation_key": {"type": "string"},
+                    },
+                    "required": ["dblp_key", "citation_key"],
+                },
+            ),
+            types.Tool(
+                name="export_bibtex",
+                description=(
+                    "Export all collected BibTeX entries to a .bib file. Call this after adding all entries with add_bibtex_entry.\n"
+                    "Workflow:\n"
+                    "  1. Saves all collected entries to a .bib file at the specified path\n"
+                    "  2. Clears the collection for next export\n"
+                    "  3. Returns the full path to the exported file\n"
+                    "Returns error if no entries have been added yet."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'). The .bib extension is added automatically if missing. Parent directories are created if needed.",
+                        },
+                    },
+                    "required": ["path"],
                 },
             ),
         ]
@@ -294,6 +263,20 @@ async def serve(export_dir=None) -> None:
         try:
             logger.info(f"Tool call: {name} with arguments {arguments}")
             match name:
+                case "get_instructions":
+                    try:
+                        instructions_path = (
+                            Path(__file__).resolve().parents[2] / "instructions_prompt.md"
+                        )
+                        with open(instructions_path, encoding="utf-8") as f:
+                            instructions = f.read()
+                        return [types.TextContent(type="text", text=instructions)]
+                    except Exception as e:
+                        return [
+                            types.TextContent(
+                                type="text", text=f"Error loading instructions: {e}"
+                            )
+                        ]
                 case "search":
                     if "query" not in arguments:
                         return [
@@ -415,37 +398,90 @@ async def serve(export_dir=None) -> None:
                             type="text", text=f"Statistics calculated:\n\n{format_dict(result)}"
                         )
                     ]
+                case "add_bibtex_entry":
+                    dblp_key = arguments.get("dblp_key")
+                    citation_key = arguments.get("citation_key")
+
+                    # Validate inputs
+                    if not dblp_key or not citation_key:
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="Error: Missing required parameter 'dblp_key' or 'citation_key'",
+                            )
+                        ]
+
+                    # Sanitize dblp_key: remove .bib extension and URL prefix if present
+                    dblp_key = dblp_key.strip()
+                    if dblp_key.endswith(".bib"):
+                        dblp_key = dblp_key[:-4]
+                    if "dblp.org/rec/" in dblp_key:
+                        dblp_key = dblp_key.split("dblp.org/rec/")[-1]
+
+                    # Construct DBLP BibTeX URL
+                    url = f"https://dblp.org/rec/{dblp_key}.bib"
+
+                    # Fetch BibTeX
+                    bibtex = fetch_and_process_bibtex(url, citation_key)
+
+                    # Check for fetch errors (function returns strings starting with % Error)
+                    if bibtex.strip().startswith("% Error"):
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Failed to add entry: {bibtex.strip()}\nCollection still contains {len(bibtex_buffer)} entries.",
+                            )
+                        ]
+
+                    # Check if we're overwriting an existing key
+                    was_overwritten = citation_key in bibtex_buffer
+
+                    # Add to buffer (overwrite if key exists)
+                    bibtex_buffer[citation_key] = bibtex
+
+                    if was_overwritten:
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Successfully added '{citation_key}' (replaced existing entry). Collection contains {len(bibtex_buffer)} entries.",
+                            )
+                        ]
+                    else:
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Successfully added '{citation_key}'. Collection contains {len(bibtex_buffer)} entries.",
+                            )
+                        ]
+
                 case "export_bibtex":
-                    if "links" not in arguments:
+                    if not bibtex_buffer:
                         return [
                             types.TextContent(
-                                type="text", text="Error: Missing required parameter 'links'"
+                                type="text",
+                                text="Error: Collection is empty. Add entries using add_bibtex_entry first.",
                             )
                         ]
 
-                    html_links = arguments.get("links")
-                    links = parse_html_links(html_links)
-
-                    if not links:
+                    path = arguments.get("path")
+                    if not path:
                         return [
                             types.TextContent(
-                                type="text", text="Error: No valid links found in the input"
+                                type="text",
+                                text="Error: Missing required parameter 'path'",
                             )
                         ]
 
-                    # Fetch and process BibTeX entries
-                    bibtex_entries = []
-                    for url, key in links:
-                        bibtex = fetch_and_process_bibtex(url, key)
-                        bibtex_entries.append(bibtex)
+                    # Convert dict values to list for writing
+                    entries = list(bibtex_buffer.values())
+                    filepath = export_bibtex_entries(entries, path)
 
-                    # Export to file
-                    filepath = export_bibtex_entries(bibtex_entries, export_dir)
+                    count = len(bibtex_buffer)
+                    bibtex_buffer.clear()  # Clear after export
 
                     return [
                         types.TextContent(
-                            type="text",
-                            text=f"Exported {len(bibtex_entries)} BibTeX entries to {filepath}",
+                            type="text", text=f"Exported {count} references to {filepath}"
                         )
                     ]
                 case _:
@@ -551,18 +587,9 @@ def format_dict(data):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="MCP-DBLP Server")
-    parser.add_argument(
-        "--exportdir",
-        type=str,
-        default=os.path.expanduser("~/.mcp-dblp/exports"),
-        help="Directory to export BibTeX files to",
-    )
-    args = parser.parse_args()
-
     logger.info(f"Starting MCP-DBLP server with version: {version_str}")
     try:
-        asyncio.run(serve(export_dir=args.exportdir))
+        asyncio.run(serve())
         return 0
     except KeyboardInterrupt:
         logger.info("Server stopped by user")

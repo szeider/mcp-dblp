@@ -34,12 +34,14 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
 
 | Tool Name                 | Description                                        |
 | ------------------------- | -------------------------------------------------- |
+| `get_instructions`        | Get usage instructions and workflow guidance       |
 | `search`                  | Search DBLP for publications using boolean queries |
 | `fuzzy_title_search`      | Search publications with fuzzy title matching      |
 | `get_author_publications` | Retrieve publications for a specific author        |
 | `get_venue_info`          | Get detailed information about a publication venue |
 | `calculate_statistics`    | Generate statistics from publication results       |
-| `export_bibtex`           | Export BibTeX entries directly from DBLP to files  |
+| `add_bibtex_entry`        | Add a BibTeX entry to collection by DBLP key       |
+| `export_bibtex`           | Export all collected BibTeX entries to a .bib file |
 
 
 ## Feedback
@@ -55,52 +57,53 @@ Provide feedback to the author via this [form](https://form.jotform.com/szeider/
 
 ## Installation
 
-1. Install an MCP-compatible client (e.g., [Claude Desktop app](https://claude.ai/download))
+### Claude Code
 
-2. Install the MCP-DBLP:
+Simply run:
 
-   ```bash
-   git clone https://github.com/username/mcp-dblp.git
-   cd mcp-dblp
-   uv venv
-   source .venv/bin/activate 
-   uv pip install -e .  
-   ```
-
-1. Create the configuration file:
-
-   For macOS/Linux:
-
-```
-   ~/Library/Application/Support/Claude/claude_desktop_config.json
+```bash
+claude mcp add mcp-dblp -- uvx mcp-dblp
 ```
 
-   For Windows:
+### Claude Desktop
 
-```
-   %APPDATA%\Claude\claude_desktop_config.json
+Add to your Claude Desktop configuration file:
+
+- macOS/Linux: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "mcp-dblp": {
+      "command": "uvx",
+      "args": ["mcp-dblp"]
+    }
+  }
+}
 ```
 
-   Add the following content:
+### From Source (Development)
 
+```bash
+git clone https://github.com/szeider/mcp-dblp.git
+cd mcp-dblp
+uv venv && source .venv/bin/activate
+uv pip install -e .
 ```
-   {
-     "mcpServers": {
-       "mcp-dblp": {
-         "command": "uv",
-         "args": [
-           "--directory",
-           "/absolute/path/to/mcp-dblp/",
-           "run",
-           "mcp-dblp",
-           "--exportdir",
-           "/absolute/path/to/bibtex/export/folder/"
-         ]
-       }
-     }
-   }
+
+Then configure Claude Desktop with:
+
+```json
+{
+  "mcpServers": {
+    "mcp-dblp": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/mcp-dblp/", "run", "mcp-dblp"]
+    }
+  }
+}
 ```
-Windows: `C:\\absolute\\path\\to\\mcp-dblp`
 
 ------
 
@@ -165,30 +168,41 @@ Calculate statistics from a list of publication results.
 
 - `results` (array, required): An array of publication objects, each with at least 'title', 'authors', 'venue', and 'year'
 
-### export_bibtex
+### add_bibtex_entry
 
-Export BibTeX entries directly from DBLP to a local file.
+Add a BibTeX entry to the collection for later export.
 
 **Parameters:**
 
-- ```
-  links
-  ```
-
-   
-
-  (string, required): HTML string containing one or more <a href=biburl>key</a> links
-
-  - Example: `"<a href=https://dblp.org/rec/journals/example.bib>Smith2023</a>"`
+- `dblp_key` (string, required): The DBLP key from search results (e.g., "conf/nips/VaswaniSPUJGKP17")
+- `citation_key` (string, required): The citation key to use in the .bib file (e.g., "Vaswani2017")
 
 **Behavior:**
 
-- For each link, the BibTeX entry is fetched directly from DBLP
-- Only the citation key is replaced with the key specified in the link text
-- All entries are saved to a timestamped .bib file in the folder specified by `--exportdir`
-- Returns the full path to the saved file
+- Fetches BibTeX entry directly from DBLP using the provided key
+- Replaces the citation key with your custom key
+- Adds to session collection (duplicate keys are overwritten)
+- Returns immediate success/failure feedback with collection count
+- Allows retry of individual failed entries
 
-**Important Note:** The BibTeX entries are fetched directly from DBLP with a 10-second timeout protection and are not processed, modified, or hallucinated by the LLM. This ensures maximum accuracy and trustworthiness of the bibliographic data. Only the citation keys are modified as specified. If a request times out, an error message is included in the output.
+### export_bibtex
+
+Export all collected BibTeX entries to a .bib file.
+
+**Parameters:**
+
+- `path` (string, required): Absolute path for the .bib file (e.g., "/path/to/refs.bib")
+
+**Behavior:**
+
+- Saves all entries added via `add_bibtex_entry` to the specified path
+- The .bib extension is added automatically if missing
+- Parent directories are created if needed
+- Clears the collection after successful export
+- Returns the full path to the saved file
+- Returns error if collection is empty
+
+**Important Note:** The BibTeX entries are fetched directly from DBLP with a 10-second timeout protection and are not processed, modified, or hallucinated by the LLM. This ensures maximum accuracy and trustworthiness of the bibliographic data. Only the citation keys are modified as specified. If a request times out, an error message is returned and the entry is not added to the collection.
 
 ------
 

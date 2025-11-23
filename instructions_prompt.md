@@ -4,18 +4,20 @@ You are given a text with embedded references in some format, for instance (auth
 
 ## Your Task
 
-1. Retrieve for each citation the matching DBLP entry
-2. Extract the COMPLETE and UNMODIFIED BibTeX entry for each citation directly from DBLP
+1. Search for each citation to get its DBLP entry
+2. **Immediately add each found entry** to the collection using add_bibtex_entry (pass dblp_key and citation_key)
+   - Do this right after finding each paper, don't wait until the end
+   - The tool fetches the COMPLETE and UNMODIFIED BibTeX directly from DBLP
 3. Output the text with each citation replaced by a \cite{..} command
-4. Output the BibTeX file containing all citations
-5. Save the bibtex file using export_bibtex tool
+4. Export all collected entries using export_bibtex tool
 
 ## Important Requirements
 
 - Use ONLY the DBLP search tool to find entries - never create citations yourself!
-- **USE BATCH/PARALLEL CALLS**: When you have multiple citations to search, make parallel tool calls in a SINGLE request rather than sequential calls. This is much more efficient.
+- **USE BATCH/PARALLEL CALLS FOR SEARCHES**: When you have multiple citations to search, make parallel search calls in a SINGLE request. This is much more efficient.
   - Example: Search for 5 different papers in one request with 5 parallel search calls
   - You can mix different tool types: searches + author lookups + venue info in one batch
+  - **However:** After getting search results, call add_bibtex_entry for each paper immediately - do NOT batch the add_bibtex_entry calls
 - BibTeX entries MUST be copied EXACTLY and COMPLETELY as they appear in DBLP (including all fields, formatting, and whitespace)
 - The ONLY modification allowed is changing the citation key:
   - For example, change "DBLP:conf/sat/Szeider09" to just "Szeider09"
@@ -61,8 +63,46 @@ If you cannot find a citation on DBLP, indicate this by adding [CITATION NOT FOU
 When presenting your solution, provide:
 
 1. The processed text with proper \cite{} commands
-2. The complete BibTeX file with entries preserving DBLP's exact format
-3. Save the bibtex file using export_bibtex
+2. Add all BibTeX entries to the collection using add_bibtex_entry
+3. Export the complete BibTeX file using export_bibtex (preserving DBLP's exact format)
+
+## Export Workflow Example
+
+**BEST PRACTICE:** Batch searches in parallel (5-10 at a time), then add each result immediately.
+
+```
+1. Search for papers in batches (5-10 papers per parallel request):
+   Batch 1 - parallel request with 5 searches:
+   - search("Vaswani 2017")
+   - search("Bengio 2015")
+   - search("LeCun deep learning")
+   - search("Schmidhuber LSTM")
+   - search("Hinton 2012")
+   All return together → you get 5 dblp_keys
+
+2. Add each result from batch 1 immediately (one by one):
+   add_bibtex_entry(dblp_key="conf/nips/VaswaniSPUJGKP17", citation_key="Vaswani2017")
+   → "Successfully added 'Vaswani2017'. Collection contains 1 entries."
+
+   add_bibtex_entry(dblp_key="journals/nature/LeCunBH15", citation_key="LeCun2015")
+   → "Successfully added 'LeCun2015'. Collection contains 2 entries."
+
+   [... add remaining 3 entries from batch 1 ...]
+
+3. If more citations remain, repeat with next batch:
+   Batch 2 - parallel search for next 5 papers, then add each...
+
+4. After all citations processed, export once:
+   export_bibtex(path="/path/to/project/references.bib")
+   → "Exported 10 references to /path/to/project/references.bib"
+```
+
+**Key points:**
+- **Batch 5-10 searches per parallel request** (avoids timeouts and rate limits)
+- **Add entries immediately** after each batch returns - process results one by one
+- For 50+ citations, use multiple batches (search batch 1 → add all → search batch 2 → add all...)
+- Do NOT batch the add_bibtex_entry calls (defeats immediate feedback)
+- **Immediate feedback advantage:** Adding one-by-one lets you detect fetch failures and retry before moving on
 
 ## Available Tools
 
@@ -78,37 +118,58 @@ This system provides the following tools to help with citation processing:
    - Parameters: venue_name (required)
 5. **calculate_statistics**: Generate statistics from publication results
    - Parameters: results (required)
-6. **export_bibtex**: Export BibTeX entries from a collection of HTML links into a file.
-   - Parameters: links (required) - HTML string containing one or more <a href=biburl>key</a> links
-   - Example: "<a href=https://dblp.org/rec/journals/example.bib>Smith23</a>"
-   - You can provide the bibtex key, the rest remains exactly as retrieved from DBLP
-   - The tool fetches BibTeX entries, replaces citation keys, and saves to a timestamped .bib file
-   - Returns the path to the saved file
+6. **add_bibtex_entry**: Add a BibTeX entry to the collection for later export
+   - Parameters: dblp_key (required), citation_key (required)
+   - Takes the DBLP key directly from search results (e.g., "conf/nips/VaswaniSPUJGKP17")
+   - **CRITICAL:** Copy the DBLP key EXACTLY as it appears in search results - character by character
+   - Fetches BibTeX from DBLP and stores it with your custom citation key
+   - Returns success/failure with collection count
+   - **If it fails:** You copied the key incorrectly - go back to search results and copy it again carefully
+   - Call this once for each paper you want to export
+7. **export_bibtex**: Export all collected BibTeX entries to a .bib file
+   - Parameters: path (required)
+   - Provide an absolute path for the .bib file (e.g., "/path/to/refs.bib")
+   - The .bib extension is added automatically if missing
+   - Parent directories are created if needed
+   - Returns the full path to the exported file
+   - Clears the collection after export
 
-## Efficiency: Use Parallel Tool Calls
+## Efficiency: Use Parallel Search Calls
 
-**IMPORTANT**: The MCP protocol supports batching multiple tool calls in a single request. When processing multiple citations:
+**IMPORTANT**: The MCP protocol supports batching multiple tool calls in a single request. Use this for SEARCH operations only.
 
-✅ **DO THIS** (Efficient - Single Request):
+✅ **DO THIS** (Efficient):
 ```
-Make parallel calls in one request:
-- search(query="author:Smith year:2023")
-- search(query="author:Jones year:2022")
-- get_author_publications(author_name="McKay", similarity_threshold=0.8)
-All execute simultaneously and return together
+1. Batch your searches in one request:
+   - search(query="author:Smith year:2023")
+   - search(query="author:Jones year:2022")
+   - get_author_publications(author_name="McKay", similarity_threshold=0.8)
+   All execute simultaneously and return together
+
+2. Then add each result immediately (sequentially):
+   - add_bibtex_entry(dblp_key="...", citation_key="Smith2023")
+   - add_bibtex_entry(dblp_key="...", citation_key="Jones2022")
+   - add_bibtex_entry(dblp_key="...", citation_key="McKay...")
 ```
 
-❌ **DON'T DO THIS** (Inefficient - Multiple Requests):
+❌ **DON'T DO THIS** (Inefficient):
 ```
-Make sequential calls:
+Sequential searches (slow):
 1. search(query="author:Smith year:2023"), wait for response
 2. search(query="author:Jones year:2022"), wait for response
 3. get_author_publications(...), wait for response
 ```
 
-**Benefits of batching:**
-- 3x-10x faster for multiple citations
-- Single round trip instead of multiple
-- Works with any combination of the 6 DBLP tools
-- Example: Process 10 citations in one batch instead of 10 sequential calls
+❌ **ALSO DON'T DO THIS** (Defeats immediate feedback):
+```
+All searches, then batch all adds:
+1. search for all 10 papers in parallel
+2. Collect all 10 dblp_keys
+3. Batch call add_bibtex_entry 10 times ← NO! Add immediately after each search result
+```
+
+**Benefits of this approach:**
+- 3x-10x faster searches via parallel calls
+- Immediate feedback on fetch failures (add one-by-one)
+- Can retry individual failed papers before moving on
 

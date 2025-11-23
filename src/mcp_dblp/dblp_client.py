@@ -234,42 +234,6 @@ def get_author_publications(
     }
 
 
-def get_title_publications(
-    title_query: str, similarity_threshold: float, max_results: int = 20
-) -> list[dict[str, Any]]:
-    """
-    Retrieve publications whose titles fuzzy-match the given title_query.
-
-    Parameters:
-        title_query (str): The title string to search for.
-        similarity_threshold (float): A compulsory threshold (0 <= threshold <= 1), where 1.0 means an exact match.
-        max_results (int): Maximum number of matching publications to return (default is 20).
-
-    Returns:
-        List[Dict[str, Any]]: A list of publication dictionaries that have a title similarity ratio
-                              greater than or equal to the threshold.
-
-    Announcement:
-        We are pleased to announce a new fuzzy title matching tool in MCP-DBLP.
-        With get_title_publications(), users can now search for publications by title using
-        a similarity threshold (with 1.0 indicating an exact match). This enhancement ensures that
-        minor variations or misspellings in publication titles do not prevent relevant results from being returned.
-    """
-    candidates = search(title_query, max_results=max_results * 2)
-    filtered = []
-
-    for pub in candidates:
-        pub_title = pub.get("title", "")
-        ratio = difflib.SequenceMatcher(None, title_query.lower(), pub_title.lower()).ratio()
-        if ratio >= similarity_threshold:
-            pub["title_similarity"] = ratio
-            filtered.append(pub)
-
-    filtered = sorted(filtered, key=lambda x: x["title_similarity"], reverse=True)
-
-    return filtered[:max_results]
-
-
 def fuzzy_title_search(
     title: str,
     similarity_threshold: float,
