@@ -10,7 +10,7 @@ import asyncio
 import logging
 import os
 import sys
-from pathlib import Path
+from importlib import resources
 
 import mcp.server.stdio
 import mcp.types as types
@@ -78,7 +78,6 @@ async def serve() -> None:
     # Session-scoped buffer for BibTeX entries
     # Key: citation_key, Value: full bibtex string
     bibtex_buffer: dict[str, str] = {}
-
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -265,17 +264,15 @@ async def serve() -> None:
             match name:
                 case "get_instructions":
                     try:
-                        instructions_path = (
-                            Path(__file__).resolve().parents[2] / "instructions_prompt.md"
+                        instructions = (
+                            resources.files("mcp_dblp")
+                            .joinpath("instructions_prompt.md")
+                            .read_text(encoding="utf-8")
                         )
-                        with open(instructions_path, encoding="utf-8") as f:
-                            instructions = f.read()
                         return [types.TextContent(type="text", text=instructions)]
                     except Exception as e:
                         return [
-                            types.TextContent(
-                                type="text", text=f"Error loading instructions: {e}"
-                            )
+                            types.TextContent(type="text", text=f"Error loading instructions: {e}")
                         ]
                 case "search":
                     if "query" not in arguments:
