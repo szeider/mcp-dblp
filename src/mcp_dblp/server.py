@@ -206,7 +206,7 @@ async def serve() -> None:
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {"results": {"type": "array"}},
+                    "properties": {"results": {"type": "array", "items": {"type": "object"}}},
                     "required": ["results"],
                 },
             ),
