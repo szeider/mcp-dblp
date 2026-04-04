@@ -21,7 +21,7 @@ DBLP_MIRRORS = ["https://dblp.org", "https://dblp.uni-trier.de", "https://dblp.d
 # DBLP recommends using an identifying User-Agent to avoid rate-limiting
 # See: https://dblp.org/faq/1474706.html
 HEADERS = {
-    "User-Agent": "mcp-dblp/1.3.0 (https://github.com/szeider/mcp-dblp)",
+    "User-Agent": "mcp-dblp/1.3.1 (https://github.com/szeider/mcp-dblp)",
     "Accept": "application/json",
 }
 

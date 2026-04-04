@@ -81,23 +81,21 @@ async def serve() -> None:
     # Key: citation_key, Value: full bibtex string
     bibtex_buffer: dict[str, str] = {}
 
+    # First-call instruction delivery
+    instructions_delivered = False
+    try:
+        _instructions_text = (
+            resources.files("mcp_dblp")
+            .joinpath("instructions_prompt.md")
+            .read_text(encoding="utf-8")
+        )
+    except Exception:
+        _instructions_text = ""
+
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         """List all available DBLP tools with detailed descriptions."""
         return [
-            types.Tool(
-                name="get_instructions",
-                description=(
-                    "Get detailed DBLP usage instructions. Key points:\n"
-                    "- Batch searches in parallel (5-10 at a time) for efficiency\n"
-                    "- Add entries immediately after each search result (don't batch add_bibtex_entry calls)\n"
-                    "- Use author+year for best results: search('Vaswani 2017') not just title\n"
-                    "- Copy dblp_key EXACTLY from search results to add_bibtex_entry\n"
-                    "- Export once at the end with export_bibtex\n"
-                    "Call this tool for complete workflow details, search strategies, and examples."
-                ),
-                inputSchema={"type": "object", "properties": {}},
-            ),
             types.Tool(
                 name="search",
                 description=(
@@ -277,24 +275,30 @@ async def serve() -> None:
             ),
         ]
 
+    def _maybe_append_instructions(result: list[types.TextContent]) -> list[types.TextContent]:
+        """Append usage instructions to the first tool call response in a session."""
+        nonlocal instructions_delivered
+        if not instructions_delivered and _instructions_text:
+            instructions_delivered = True
+            result.append(
+                types.TextContent(
+                    type="text",
+                    text=f"\n---\n## DBLP Usage Instructions\n\n{_instructions_text}",
+                )
+            )
+        return result
+
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         """Handle tool calls from clients"""
+        result = _dispatch_tool(name, arguments)
+        return _maybe_append_instructions(result)
+
+    def _dispatch_tool(name: str, arguments: dict) -> list[types.TextContent]:
+        """Dispatch a tool call and return the result."""
         try:
             logger.info(f"Tool call: {name} with arguments {arguments}")
             match name:
-                case "get_instructions":
-                    try:
-                        instructions = (
-                            resources.files("mcp_dblp")
-                            .joinpath("instructions_prompt.md")
-                            .read_text(encoding="utf-8")
-                        )
-                        return [types.TextContent(type="text", text=instructions)]
-                    except Exception as e:
-                        return [
-                            types.TextContent(type="text", text=f"Error loading instructions: {e}")
-                        ]
                 case "search":
                     if "query" not in arguments:
                         return [
