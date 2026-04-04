@@ -20,6 +20,7 @@ from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
 # Import DBLP client functions
+from mcp_dblp import dblp_client
 from mcp_dblp.dblp_client import (
     calculate_statistics,
     fetch_and_process_bibtex,
@@ -27,6 +28,7 @@ from mcp_dblp.dblp_client import (
     get_author_publications,
     get_venue_info,
     search,
+    set_dblp_base_url,
 )
 
 # Set up logging
@@ -208,6 +210,25 @@ async def serve() -> None:
                     "type": "object",
                     "properties": {"results": {"type": "array", "items": {"type": "object"}}},
                     "required": ["results"],
+                },
+            ),
+            types.Tool(
+                name="set_dblp_mirror",
+                description=(
+                    "Switch the DBLP server to a mirror. Use this if requests to the default dblp.org are timing out or failing.\n"
+                    "Available mirrors:\n"
+                    "  - dblp.org (default)\n"
+                    "  - dblp.uni-trier.de\n"
+                    "  - dblp.dagstuhl.de\n"
+                    "All three are official DBLP mirrors maintained by Schloss Dagstuhl and University of Trier.\n"
+                    "The chosen mirror applies to all subsequent DBLP requests in this session.\n"
+                    "Arguments:\n"
+                    "  - host (string, required): Mirror hostname (e.g., 'dblp.uni-trier.de')."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {"host": {"type": "string"}},
+                    "required": ["host"],
                 },
             ),
             types.Tool(
@@ -395,6 +416,23 @@ async def serve() -> None:
                             type="text", text=f"Statistics calculated:\n\n{format_dict(result)}"
                         )
                     ]
+                case "set_dblp_mirror":
+                    host = arguments.get("host")
+                    if not host:
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="Error: Missing required parameter 'host'",
+                            )
+                        ]
+                    new_url = set_dblp_base_url(host)
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"DBLP mirror switched to {new_url}. All subsequent requests will use this mirror.",
+                        )
+                    ]
+
                 case "add_bibtex_entry":
                     dblp_key = arguments.get("dblp_key")
                     citation_key = arguments.get("citation_key")
@@ -412,11 +450,18 @@ async def serve() -> None:
                     dblp_key = dblp_key.strip()
                     if dblp_key.endswith(".bib"):
                         dblp_key = dblp_key[:-4]
-                    if "dblp.org/rec/" in dblp_key:
-                        dblp_key = dblp_key.split("dblp.org/rec/")[-1]
+                    # Strip any DBLP mirror prefix (derived dynamically)
+                    known_hosts = [dblp_client.DBLP_BASE_URL] + [
+                        m for m in dblp_client.DBLP_MIRRORS if m != dblp_client.DBLP_BASE_URL
+                    ]
+                    for host in known_hosts:
+                        prefix = host.replace("https://", "") + "/rec/"
+                        if prefix in dblp_key:
+                            dblp_key = dblp_key.split(prefix)[-1]
+                            break
 
-                    # Construct DBLP BibTeX URL
-                    url = f"https://dblp.org/rec/{dblp_key}.bib"
+                    # Construct DBLP BibTeX URL using current base URL
+                    url = f"{dblp_client.DBLP_BASE_URL}/rec/{dblp_key}.bib"
 
                     # Fetch BibTeX
                     bibtex = fetch_and_process_bibtex(url, citation_key)

@@ -12,20 +12,43 @@ logger = logging.getLogger("dblp_client")
 # Default timeout for all HTTP requests
 REQUEST_TIMEOUT = 10  # seconds
 
+# DBLP base URL and mirrors
+# Primary: dblp.org (Schloss Dagstuhl), Mirrors: dblp.uni-trier.de, dblp.dagstuhl.de
+DBLP_BASE_URL = "https://dblp.org"
+DBLP_MIRRORS = ["https://dblp.org", "https://dblp.uni-trier.de", "https://dblp.dagstuhl.de"]
+
 # Headers for DBLP API requests
 # DBLP recommends using an identifying User-Agent to avoid rate-limiting
 # See: https://dblp.org/faq/1474706.html
 HEADERS = {
-    "User-Agent": "mcp-dblp/1.1.1 (https://github.com/szeider/mcp-dblp)",
+    "User-Agent": "mcp-dblp/1.3.0 (https://github.com/szeider/mcp-dblp)",
     "Accept": "application/json",
 }
+
+
+def set_dblp_base_url(host: str) -> str:
+    """Set the DBLP base URL to a specific mirror host.
+
+    Args:
+        host: Mirror hostname (e.g., 'dblp.uni-trier.de' or 'https://dblp.uni-trier.de')
+
+    Returns:
+        The new base URL that was set.
+    """
+    global DBLP_BASE_URL
+    if not host.startswith("https://"):
+        host = f"https://{host}"
+    host = host.rstrip("/")
+    DBLP_BASE_URL = host
+    logger.info(f"DBLP base URL set to: {DBLP_BASE_URL}")
+    return DBLP_BASE_URL
 
 
 def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, Any]]:
     """Helper function to fetch publications for a single query string."""
     results = []
     try:
-        url = "https://dblp.org/search/publ/api"
+        url = f"{DBLP_BASE_URL}/search/publ/api"
         params = {"q": single_query, "format": "json", "h": max_results}
         response = requests.get(url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
@@ -55,7 +78,13 @@ def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, A
 
                 if dblp_url:
                     # Extract the key from the URL (e.g., https://dblp.org/rec/journals/jmlr/ChowdheryNDBMGMBCDDRSSTWPLLNSZDYJGKPSN23)
-                    dblp_key = dblp_url.replace("https://dblp.org/rec/", "")
+                    # Strip any DBLP mirror prefix from the URL
+                    # Check DBLP_BASE_URL first (may be a custom mirror not in DBLP_MIRRORS)
+                    known_hosts = [DBLP_BASE_URL] + [m for m in DBLP_MIRRORS if m != DBLP_BASE_URL]
+                    for mirror in known_hosts:
+                        dblp_key = dblp_url.replace(f"{mirror}/rec/", "")
+                        if dblp_key != dblp_url:
+                            break
                 elif "key" in pub:
                     dblp_key = pub.get("key", "").replace("dblp:", "")
                 else:
@@ -347,7 +376,16 @@ def fetch_and_process_bibtex(url, new_key):
         return bibtex
     except requests.exceptions.Timeout:
         logger.error(f"Timeout fetching {url} after {REQUEST_TIMEOUT} seconds")
-        return f"% Error: Timeout fetching {url} after {REQUEST_TIMEOUT} seconds"
+        return (
+            f"% Error: Timeout fetching {url} after {REQUEST_TIMEOUT} seconds. "
+            f"If this persists, try switching to a DBLP mirror using set_dblp_mirror (available: dblp.uni-trier.de, dblp.dagstuhl.de)."
+        )
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Connection error fetching {url}: {str(e)}", exc_info=True)
+        return (
+            f"% Error: Connection failed for {url}: {str(e)}. "
+            f"Try switching to a DBLP mirror using set_dblp_mirror (available: dblp.uni-trier.de, dblp.dagstuhl.de)."
+        )
     except Exception as e:
         logger.error(f"Error fetching {url}: {str(e)}", exc_info=True)
         return f"% Error fetching {url}: {str(e)}"
@@ -372,17 +410,13 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
         # Try multiple URL formats to increase chances of success
         urls_to_try = []
 
-        # Format 1: Direct key
-        urls_to_try.append(f"https://dblp.org/rec/{dblp_key}.bib")
+        # Format 1: Direct key (works for both simple and slash-containing keys)
+        urls_to_try.append(f"{DBLP_BASE_URL}/rec/{dblp_key}.bib")
 
-        # Format 2: If the key has slashes, it might be a full path
-        if "/" in dblp_key:
-            urls_to_try.append(f"https://dblp.org/rec/{dblp_key}.bib")
-
-        # Format 3: If the key has a colon, it might be a DBLP-style key
+        # Format 2: If the key has a colon, it might be a DBLP-style key
         if ":" in dblp_key:
             clean_key = dblp_key.replace(":", "/")
-            urls_to_try.append(f"https://dblp.org/rec/{clean_key}.bib")
+            urls_to_try.append(f"{DBLP_BASE_URL}/rec/{clean_key}.bib")
 
         # Try each URL until one works
         for url in urls_to_try:
@@ -441,7 +475,16 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
 
     except requests.exceptions.Timeout:
         logger.error(f"Timeout fetching BibTeX for {dblp_key} after {REQUEST_TIMEOUT} seconds")
-        return f"% Error: Timeout fetching BibTeX for {dblp_key} after {REQUEST_TIMEOUT} seconds"
+        return (
+            f"% Error: Timeout fetching BibTeX for {dblp_key} after {REQUEST_TIMEOUT} seconds. "
+            f"If this persists, try switching to a DBLP mirror using set_dblp_mirror (available: dblp.uni-trier.de, dblp.dagstuhl.de)."
+        )
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Connection error fetching BibTeX for {dblp_key}: {str(e)}", exc_info=True)
+        return (
+            f"% Error: Connection failed for {dblp_key}: {str(e)}. "
+            f"Try switching to a DBLP mirror using set_dblp_mirror (available: dblp.uni-trier.de, dblp.dagstuhl.de)."
+        )
     except Exception as e:
         logger.error(f"Error fetching BibTeX for {dblp_key}: {str(e)}", exc_info=True)
         return (
@@ -456,7 +499,7 @@ def get_venue_info(venue_name: str) -> dict[str, Any]:
     """
     logger.info(f"Getting information for venue: {venue_name}")
     try:
-        url = "https://dblp.org/search/venue/api"
+        url = f"{DBLP_BASE_URL}/search/venue/api"
         params = {"q": venue_name, "format": "json", "h": 1}
         response = requests.get(url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()

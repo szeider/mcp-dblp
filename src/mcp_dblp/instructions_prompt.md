@@ -104,6 +104,21 @@ When presenting your solution, provide:
 - Do NOT batch the add_bibtex_entry calls (defeats immediate feedback)
 - **Immediate feedback advantage:** Adding one-by-one lets you detect fetch failures and retry before moving on
 
+## DBLP Mirrors
+
+If you encounter timeouts or connection errors, switch to a DBLP mirror:
+
+```
+set_dblp_mirror(host="dblp.uni-trier.de")
+```
+
+Available mirrors (all official):
+- **dblp.org** (default) — primary, operated by Schloss Dagstuhl
+- **dblp.uni-trier.de** — University of Trier mirror
+- **dblp.dagstuhl.de** — Dagstuhl mirror
+
+Once set, the mirror applies to all subsequent requests in the session. You only need to call this once.
+
 ## Available Tools
 
 This system provides the following tools to help with citation processing:
@@ -118,7 +133,9 @@ This system provides the following tools to help with citation processing:
    - Parameters: venue_name (required)
 5. **calculate_statistics**: Generate statistics from publication results
    - Parameters: results (required)
-6. **add_bibtex_entry**: Add a BibTeX entry to the collection for later export
+6. **set_dblp_mirror**: Switch to a DBLP mirror if the default server is slow or unreachable
+   - Parameters: host (required) — e.g., "dblp.uni-trier.de" or "dblp.dagstuhl.de"
+7. **add_bibtex_entry**: Add a BibTeX entry to the collection for later export
    - Parameters: dblp_key (required), citation_key (required)
    - Takes the DBLP key directly from search results (e.g., "conf/nips/VaswaniSPUJGKP17")
    - **CRITICAL:** Copy the DBLP key EXACTLY as it appears in search results - character by character
@@ -126,7 +143,7 @@ This system provides the following tools to help with citation processing:
    - Returns success/failure with collection count
    - **If it fails:** You copied the key incorrectly - go back to search results and copy it again carefully
    - Call this once for each paper you want to export
-7. **export_bibtex**: Export all collected BibTeX entries to a .bib file
+8. **export_bibtex**: Export all collected BibTeX entries to a .bib file
    - Parameters: path (required)
    - Provide an absolute path for the .bib file (e.g., "/path/to/refs.bib")
    - The .bib extension is added automatically if missing
