@@ -22,7 +22,6 @@ from mcp.server.models import InitializationOptions
 # Import DBLP client functions
 from mcp_dblp import dblp_client
 from mcp_dblp.dblp_client import (
-    calculate_statistics,
     fetch_and_process_bibtex,
     fuzzy_title_search,
     get_author_publications,
@@ -190,24 +189,6 @@ async def serve() -> None:
                     "type": "object",
                     "properties": {"venue_name": {"type": "string"}},
                     "required": ["venue_name"],
-                },
-            ),
-            types.Tool(
-                name="calculate_statistics",
-                description=(
-                    "Calculate statistics from a list of publication results.\n"
-                    "Arguments:\n"
-                    "  - results (array, required): An array of publication objects, each with at least 'title', 'authors', 'venue', and 'year'.\n"
-                    "Returns a dictionary with:\n"
-                    "  - total_publications: Total count.\n"
-                    "  - time_range: Dictionary with 'min' and 'max' publication years.\n"
-                    "  - top_authors: List of tuples (author, count) sorted by count.\n"
-                    "  - top_venues: List of tuples (venue, count) sorted by count (empty venue is treated as '(empty)')."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {"results": {"type": "array", "items": {"type": "object"}}},
-                    "required": ["results"],
                 },
             ),
             types.Tool(
@@ -407,19 +388,6 @@ async def serve() -> None:
                             text=f"Venue information for {arguments['venue_name']}:\n\n{format_dict(result)}",
                         )
                     ]
-                case "calculate_statistics":
-                    if "results" not in arguments:
-                        return [
-                            types.TextContent(
-                                type="text", text="Error: Missing required parameter 'results'"
-                            )
-                        ]
-                    result = calculate_statistics(results=arguments.get("results"))
-                    return [
-                        types.TextContent(
-                            type="text", text=f"Statistics calculated:\n\n{format_dict(result)}"
-                        )
-                    ]
                 case "set_dblp_mirror":
                     host = arguments.get("host")
                     if not host:
@@ -460,8 +428,8 @@ async def serve() -> None:
                     ]
                     for host in known_hosts:
                         prefix = host.replace("https://", "") + "/rec/"
-                        if prefix in dblp_key:
-                            dblp_key = dblp_key.split(prefix)[-1]
+                        if dblp_key.startswith(prefix):
+                            dblp_key = dblp_key[len(prefix) :]
                             break
 
                     # Construct DBLP BibTeX URL using current base URL
@@ -560,9 +528,12 @@ def format_results(results):
         authors = ", ".join(result.get("authors", []))
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
+        dblp_key = result.get("dblp_key", "")
         formatted.append(f"{i + 1}. {title}")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
+        if dblp_key:
+            formatted.append(f"   DBLP key: {dblp_key}")
         formatted.append("")
     return "\n".join(formatted)
 
@@ -577,9 +548,12 @@ def format_results_with_similarity(results):
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
         similarity = result.get("similarity", 0.0)
+        dblp_key = result.get("dblp_key", "")
         formatted.append(f"{i + 1}. {title} [Similarity: {similarity:.2f}]")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
+        if dblp_key:
+            formatted.append(f"   DBLP key: {dblp_key}")
         formatted.append("")
     return "\n".join(formatted)
 
@@ -593,9 +567,12 @@ def format_results_with_bibtex(results):
         authors = ", ".join(result.get("authors", []))
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
+        dblp_key = result.get("dblp_key", "")
         formatted.append(f"{i + 1}. {title}")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
+        if dblp_key:
+            formatted.append(f"   DBLP key: {dblp_key}")
         if "bibtex" in result and result["bibtex"]:
             formatted.append("\n   BibTeX:")
             bibtex_lines = result["bibtex"].strip().split("\n")
@@ -614,9 +591,12 @@ def format_results_with_similarity_and_bibtex(results):
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
         similarity = result.get("similarity", 0.0)
+        dblp_key = result.get("dblp_key", "")
         formatted.append(f"{i + 1}. {title} [Similarity: {similarity:.2f}]")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
+        if dblp_key:
+            formatted.append(f"   DBLP key: {dblp_key}")
         if "bibtex" in result and result["bibtex"]:
             formatted.append("\n   BibTeX:")
             bibtex_lines = result["bibtex"].strip().split("\n")

@@ -39,7 +39,6 @@ The MCP-DBLP integrates the DBLP (Digital Bibliography & Library Project) API wi
 | `fuzzy_title_search`      | Search publications with fuzzy title matching      |
 | `get_author_publications` | Retrieve publications for a specific author        |
 | `get_venue_info`          | Get detailed information about a publication venue |
-| `calculate_statistics`    | Generate statistics from publication results       |
 | `add_bibtex_entry`        | Add a BibTeX entry to collection by DBLP key       |
 | `export_bibtex`           | Export all collected BibTeX entries to a .bib file |
 
@@ -159,14 +158,6 @@ Retrieve detailed information about a publication venue.
 **Parameters:**
 
 - `venue_name` (string, required): Venue name or abbreviation (e.g., 'ICLR' or full name)
-
-### calculate_statistics
-
-Calculate statistics from a list of publication results.
-
-**Parameters:**
-
-- `results` (array, required): An array of publication objects, each with at least 'title', 'authors', 'venue', and 'year'
 
 ### add_bibtex_entry
 

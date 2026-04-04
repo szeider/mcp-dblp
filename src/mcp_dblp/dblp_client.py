@@ -1,4 +1,3 @@
-import contextlib
 import difflib
 import logging
 import re
@@ -21,7 +20,7 @@ DBLP_MIRRORS = ["https://dblp.org", "https://dblp.uni-trier.de", "https://dblp.d
 # DBLP recommends using an identifying User-Agent to avoid rate-limiting
 # See: https://dblp.org/faq/1474706.html
 HEADERS = {
-    "User-Agent": "mcp-dblp/1.3.1 (https://github.com/szeider/mcp-dblp)",
+    "User-Agent": "mcp-dblp/1.4.0 (https://github.com/szeider/mcp-dblp)",
     "Accept": "application/json",
 }
 
@@ -112,6 +111,7 @@ def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, A
                 "authors": [],
                 "venue": "Error",
                 "year": None,
+                "dblp_key": "",
                 "error": f"Timeout after {REQUEST_TIMEOUT} seconds",
             }
         )
@@ -125,6 +125,7 @@ def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, A
                 "authors": [],
                 "venue": "Error",
                 "year": None,
+                "dblp_key": "",
                 "error": str(e),
             }
         )
@@ -176,12 +177,14 @@ def search(
 
     filtered_results = []
     for result in results:
-        if year_from or year_to:
+        if year_from is not None or year_to is not None:
             year = result.get("year")
-            if year:
+            if year is not None:
                 try:
                     year = int(year)
-                    if (year_from and year < year_from) or (year_to and year > year_to):
+                    if (year_from is not None and year < year_from) or (
+                        year_to is not None and year > year_to
+                    ):
                         continue
                 except (ValueError, TypeError):
                     pass
@@ -334,7 +337,13 @@ def fuzzy_title_search(
     filtered = []
     for pub in candidates:
         pub_title = pub.get("title", "")
-        ratio = difflib.SequenceMatcher(None, title.lower(), pub_title.lower()).ratio()
+        title_lower = title.lower()
+        pub_title_lower = pub_title.lower()
+        if title_lower in pub_title_lower:
+            # Full substring match — score reflects coverage but always at least 0.8
+            ratio = max(0.8, len(title_lower) / len(pub_title_lower)) if pub_title_lower else 0
+        else:
+            ratio = difflib.SequenceMatcher(None, title_lower, pub_title_lower).ratio()
         if ratio >= similarity_threshold:
             pub["similarity"] = ratio
             filtered.append(pub)
@@ -372,7 +381,12 @@ def fetch_and_process_bibtex(url, new_key):
         bibtex = response.text
 
         # Replace the key in format @TYPE{KEY, ... -> @TYPE{new_key, ...
-        bibtex = re.sub(r"@(\w+){([^,]+),", r"@\1{" + new_key + ",", bibtex, count=1)
+        bibtex = re.sub(
+            r"@(\w+){([^,]+),",
+            lambda m: f"@{m.group(1)}{{{new_key},",
+            bibtex,
+            count=1,
+        )
         return bibtex
     except requests.exceptions.Timeout:
         logger.error(f"Timeout fetching {url} after {REQUEST_TIMEOUT} seconds")
@@ -435,9 +449,10 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
                 # Extract the citation type and key (e.g., @article{DBLP:journals/jmlr/ChowdheryNDBMGMBCDDRSSTWPLLNSZDYJGKPSN23,)
                 citation_key_match = re.match(r"@(\w+){([^,]+),", bibtex)
                 if citation_key_match:
-                    citation_type = citation_key_match.group(1)
                     old_key = citation_key_match.group(2)
-                    logger.info(f"Found citation type: {citation_type}, key: {old_key}")
+                    logger.info(
+                        f"Found citation type: {citation_key_match.group(1)}, key: {old_key}"
+                    )
 
                     # Create a new key based on the first author's last name and year
                     # Try to extract author and year from the DBLP key or from the BibTeX content
@@ -536,41 +551,3 @@ def get_venue_info(venue_name: str) -> dict[str, Any]:
             "type": "",
             "url": "",
         }
-
-
-def calculate_statistics(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """
-    Calculate statistics from publication results.
-    (Documentation omitted for brevity)
-    """
-    logger.info(f"Calculating statistics for {len(results)} results")
-    authors = Counter()
-    venues = Counter()
-    years = []
-
-    for result in results:
-        for author in result.get("authors", []):
-            authors[author] += 1
-
-        venue = result.get("venue", "")
-        # Handle venue as list or string
-        if isinstance(venue, list):
-            venue = ", ".join(venue) if venue else ""
-        if venue:
-            venues[venue] += 1
-        else:
-            venues["(empty)"] += 1
-
-        year = result.get("year")
-        if year:
-            with contextlib.suppress(ValueError, TypeError):
-                years.append(int(year))
-
-    stats = {
-        "total_publications": len(results),
-        "time_range": {"min": min(years) if years else None, "max": max(years) if years else None},
-        "top_authors": sorted(authors.items(), key=lambda x: x[1], reverse=True),
-        "top_venues": sorted(venues.items(), key=lambda x: x[1], reverse=True),
-    }
-
-    return stats
