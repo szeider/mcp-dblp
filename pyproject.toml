@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-dblp"
-version = "1.4.0"
+version = "1.4.1"
 description = "An MCP server that provides access to the DBLP computer science bibliography for LLMs."
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,7 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.20.0",
+    "mcp>=1.20.0,<2",
     "requests>=2.32.5"
 ]
 
