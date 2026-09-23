@@ -175,5 +175,4 @@ cython_debug/
 
 # Project-specific (development artifacts not tracked in git)
 CLAUDE.md
-test/
 paper/

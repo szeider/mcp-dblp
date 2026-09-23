@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE dblp SYSTEM "dblp.dtd">
+<dblp>
+<article mdate="2021-03-15" key="journals/tcs/GodelS20">
+<author>Kurt G&ouml;del</author>
+<author>Stefan Szeider</author>
+<title>Beyond O(n<sup>2</sup>) Time for Treewidth &amp; SAT.</title>
+<pages>1-20</pages>
+<year>2020</year>
+<volume>812</volume>
+<journal>Theor. Comput. Sci.</journal>
+<ee>https://doi.org/10.1016/j.tcs.2020.01.001</ee>
+<url>db/journals/tcs/tcs812.html#GodelS20</url>
+</article>
+<proceedings mdate="2021-07-01" key="conf/sat/2021">
+<editor>Chu-Min Li</editor>
+<editor>Felip Many&agrave;</editor>
+<title>Theory and Applications of Satisfiability Testing - SAT 2021 - 24th International Conference, Barcelona, Spain, July 5-9, 2021, Proceedings</title>
+<series href="db/series/lncs/index.html">Lecture Notes in Computer Science</series>
+<volume>12831</volume>
+<publisher>Springer</publisher>
+<year>2021</year>
+<isbn>978-3-030-80222-6</isbn>
+<ee>https://doi.org/10.1007/978-3-030-80223-3</ee>
+<booktitle>SAT</booktitle>
+<url>db/conf/sat/sat2021.html</url>
+</proceedings>
+<inproceedings mdate="2021-07-20" key="conf/sat/KirchwegerS21">
+<author>Markus Kirchweger</author>
+<author>Stefan Szeider</author>
+<title>SAT Modulo Symmetries for Graph Generation.</title>
+<pages>34:1-34:16</pages>
+<year>2021</year>
+<booktitle>SAT</booktitle>
+<ee>https://doi.org/10.4230/LIPIcs.CP.2021.34</ee>
+<crossref>conf/sat/2021</crossref>
+<url>db/conf/sat/sat2021.html#KirchwegerS21</url>
+</inproceedings>
+<inproceedings mdate="2021-07-20" key="conf/sat/ManyaG21">
+<author>Felip Many&agrave;</author>
+<author>Kurt G&ouml;del</author>
+<title>Graph Coloring with MaxSAT.</title>
+<pages>100-110</pages>
+<year>2021</year>
+<booktitle>SAT</booktitle>
+<ee>https://doi.org/10.1007/978-3-030-80223-3_8</ee>
+<crossref>conf/sat/2021</crossref>
+<url>db/conf/sat/sat2021.html#ManyaG21</url>
+</inproceedings>
+<article mdate="2023-01-05" key="journals/corr/abs-2301-01234" publtype="informal">
+<author>Markus Kirchweger</author>
+<author>Stefan Szeider</author>
+<title>Co-Certificate Learning with SAT Modulo Symmetries.</title>
+<journal>CoRR</journal>
+<volume>abs/2301.01234</volume>
+<year>2023</year>
+<ee type="oa">https://doi.org/10.48550/arXiv.2301.01234</ee>
+<url>db/journals/corr/corr2301.html#abs-2301-01234</url>
+</article>
+<article mdate="2020-02-02" key="journals/tcs/SzuderSSSS19">
+<author>Anna Szuder</author>
+<author>Bob Szreder</author>
+<author>Carl Szender</author>
+<author>Dan Sziede</author>
+<author>Eve Szeder</author>
+<title>Surnames Close to a Typo.</title>
+<year>2019</year>
+<volume>790</volume>
+<journal>Theor. Comput. Sci.</journal>
+<ee>https://doi.org/10.1016/j.tcs.2019.02.002</ee>
+</article>
+<article mdate="2021-06-01" key="journals/ipl/PetrovaW21">
+<author>Olga Petrova</author>
+<author>Hans Weber</author>
+<title>A Kolmogorov-Smirnov test for graph statistics.</title>
+<pages>1-8</pages>
+<year>2021</year>
+<volume>170</volume>
+<journal>Inf. Process. Lett.</journal>
+<ee>https://doi.org/10.1016/j.ipl.2021.106101</ee>
+<url>db/journals/ipl/ipl170.html#PetrovaW21</url>
+</article>
+<article mdate="2021-06-01" key="journals/ipl/SmirnovB21">
+<author>Ivan Smirnov</author>
+<author>Lena Berg</author>
+<title>Fast Parsing of Streaming Data.</title>
+<pages>9-15</pages>
+<year>2021</year>
+<volume>170</volume>
+<journal>Inf. Process. Lett.</journal>
+<ee>https://doi.org/10.1016/j.ipl.2021.106102</ee>
+<url>db/journals/ipl/ipl170.html#SmirnovB21</url>
+</article>
+<inproceedings mdate="2019-06-01" key="conf/vardial/NguyenT19">
+<author>Linh Nguyen</author>
+<author>Tom Tran</author>
+<title>Commonsense Knowledge for Dialect Identification.</title>
+<pages>1-10</pages>
+<year>2019</year>
+<booktitle>VarDial@NAACL-HLT</booktitle>
+<ee>https://doi.org/10.18653/v1/W19-1401</ee>
+<url>db/conf/vardial/vardial2019.html#NguyenT19</url>
+</inproceedings>
+<www mdate="2020-01-01" key="homepages/s/StefanSzeider">
+<author>Stefan Szeider</author>
+<title>Home Page</title>
+<url>https://www.ac.tuwien.ac.at/people/szeider/</url>
+</www>
+</dblp>

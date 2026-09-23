@@ -26,6 +26,8 @@ BibTeX entries are fetched directly from DBLP — never create them manually.
 
 Only mark as [CITATION NOT FOUND] after 3+ different search attempts.
 
+**Check the `Matched:` line of each search result.** A person named in the citation should match an author (for "X et al." the first author), not a title word or a given name; results marked "prefix match only" are usually different people or papers. If no result matches properly, report the citation as not found rather than picking one.
+
 ## Parallel Searches, Sequential Adds
 
 **Batch 5-10 searches in a single parallel request** for efficiency:
@@ -45,7 +47,7 @@ Adding one-by-one gives immediate feedback on failures so you can retry before m
 
 ## DBLP Mirrors
 
-If you encounter timeouts or connection errors, switch to a mirror:
+If you encounter timeouts or connection errors, switch to a mirror (when the server uses a local copy of the DBLP database, searches work offline and the mirror only matters for BibTeX keys missing from that copy):
 
 ```
 set_dblp_mirror(host="dblp.uni-trier.de")

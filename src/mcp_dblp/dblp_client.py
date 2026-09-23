@@ -19,8 +19,15 @@ DBLP_MIRRORS = ["https://dblp.org", "https://dblp.uni-trier.de", "https://dblp.d
 # Headers for DBLP API requests
 # DBLP recommends using an identifying User-Agent to avoid rate-limiting
 # See: https://dblp.org/faq/1474706.html
+try:
+    from importlib.metadata import version as _version
+
+    _VERSION = _version("mcp-dblp")
+except Exception:
+    _VERSION = "unknown"
+
 HEADERS = {
-    "User-Agent": "mcp-dblp/1.4.1 (https://github.com/szeider/mcp-dblp)",
+    "User-Agent": f"mcp-dblp/{_VERSION} (https://github.com/szeider/mcp-dblp)",
     "Accept": "application/json",
 }
 
@@ -33,12 +40,17 @@ def set_dblp_base_url(host: str) -> str:
 
     Returns:
         The new base URL that was set.
+
+    Raises:
+        ValueError: if host is not one of DBLP_MIRRORS.
     """
     global DBLP_BASE_URL
-    if not host.startswith("https://"):
-        host = f"https://{host}"
-    host = host.rstrip("/")
-    DBLP_BASE_URL = host
+    name = host.strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+    url = f"https://{name}"
+    if url not in DBLP_MIRRORS:
+        known = ", ".join(m.removeprefix("https://") for m in DBLP_MIRRORS)
+        raise ValueError(f"'{host}' is not a dblp mirror (known mirrors: {known})")
+    DBLP_BASE_URL = url
     logger.info(f"DBLP base URL set to: {DBLP_BASE_URL}")
     return DBLP_BASE_URL
 
@@ -213,6 +225,8 @@ def get_author_publications(
     similarity_threshold: float,
     max_results: int = 20,
     include_bibtex: bool = False,
+    year_from: int | None = None,
+    year_to: int | None = None,
 ) -> dict[str, Any]:
     """
     Get publication information for a specific author with fuzzy matching.
@@ -222,6 +236,9 @@ def get_author_publications(
         similarity_threshold (float): Threshold for fuzzy matching (0-1).
         max_results (int, optional): Maximum number of results to return. Default is 20.
         include_bibtex (bool, optional): Whether to include BibTeX entries. Default is False.
+        year_from (int, optional): Only publications from this year on.
+        year_to (int, optional): Only publications up to this year.
+            The year filter applies to the fetched publications (post hoc).
 
     Returns:
         Dict[str, Any]: Dictionary with author publication information.
@@ -241,6 +258,15 @@ def get_author_publications(
                 best_ratio = ratio
         if best_ratio >= similarity_threshold:
             filtered_publications.append(pub)
+
+    if year_from is not None or year_to is not None:
+        filtered_publications = [
+            p
+            for p in filtered_publications
+            if p.get("year") is not None
+            and (year_from is None or int(p["year"]) >= int(year_from))
+            and (year_to is None or int(p["year"]) <= int(year_to))
+        ]
 
     filtered_publications = filtered_publications[:max_results]
 
@@ -364,6 +390,16 @@ def fuzzy_title_search(
     return filtered
 
 
+def replace_citation_key(bibtex: str, new_key: str) -> str:
+    """Replace the first citation key: @TYPE{KEY, ... -> @TYPE{new_key, ..."""
+    return re.sub(
+        r"@(\w+){([^,]+),",
+        lambda m: f"@{m.group(1)}{{{new_key},",
+        bibtex,
+        count=1,
+    )
+
+
 def fetch_and_process_bibtex(url, new_key):
     """
     Fetch BibTeX from URL and replace the key with new_key.
@@ -378,16 +414,7 @@ def fetch_and_process_bibtex(url, new_key):
     try:
         response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        bibtex = response.text
-
-        # Replace the key in format @TYPE{KEY, ... -> @TYPE{new_key, ...
-        bibtex = re.sub(
-            r"@(\w+){([^,]+),",
-            lambda m: f"@{m.group(1)}{{{new_key},",
-            bibtex,
-            count=1,
-        )
-        return bibtex
+        return replace_citation_key(response.text, new_key)
     except requests.exceptions.Timeout:
         logger.error(f"Timeout fetching {url} after {REQUEST_TIMEOUT} seconds")
         return (
@@ -443,6 +470,12 @@ def fetch_bibtex_entry(dblp_key: str) -> str:
                 if not bibtex or bibtex.isspace():
                     logger.warning(f"Received empty BibTeX content for URL: {url}")
                     continue
+                if not bibtex.lstrip().startswith("@"):
+                    # e.g. dblp's bot-check page, served with status 200
+                    logger.warning(f"Response for {url} is not BibTeX: {bibtex[:80]!r}")
+                    return (
+                        f"% Error: response for {dblp_key} is not BibTeX ({bibtex.strip()[:60]!r})"
+                    )
 
                 logger.info(f"BibTeX content (first 100 chars): {bibtex[:100]}")
 

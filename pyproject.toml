@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-dblp"
-version = "1.4.1"
+version = "2.0.0"
 description = "An MCP server that provides access to the DBLP computer science bibliography for LLMs."
 readme = "README.md"
 license = "MIT"
@@ -24,8 +24,10 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.20.0,<2",
-    "requests>=2.32.5"
+    "mcp>=2.2,<3",
+    "requests>=2.32.5",
+    "lxml>=5.0",
+    "zstandard>=0.23",
 ]
 
 [project.urls]
@@ -33,8 +35,19 @@ Homepage = "https://github.com/szeider/mcp-dblp"
 Repository = "https://github.com/szeider/mcp-dblp"
 Issues = "https://github.com/szeider/mcp-dblp/issues"
 
+[tool.hatch.build.targets.sdist]
+# Ship only the package and its metadata files; everything else in the working
+# tree (evaluation data, notes, prototypes) stays out of the published sdist.
+include = [
+    "/src/mcp_dblp",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+
 [project.scripts]
 mcp-dblp = "mcp_dblp.server:main"
+mcp-dblp-index = "mcp_dblp.local_index:main"
 
 [tool.black]
 line-length = 88

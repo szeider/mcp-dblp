@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from importlib import resources
 
 import mcp.server.stdio
@@ -19,26 +20,24 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
-# Import DBLP client functions
-from mcp_dblp import dblp_client
-from mcp_dblp.dblp_client import (
-    fetch_and_process_bibtex,
-    fuzzy_title_search,
-    get_author_publications,
-    get_venue_info,
-    search,
-    set_dblp_base_url,
-)
+# Backend: local dump index or dblp.org web API (same functions and result dicts)
+from mcp_dblp import local_index
+from mcp_dblp.backend import IndexUnavailable, select_backend
 
-# Set up logging
-log_dir = os.path.expanduser("~/.mcp-dblp")
-os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, "mcp_dblp_server.log")
+# Set up logging: the log file lives in MCP_DBLP_HOME (default ~/.mcp-dblp); if it cannot
+# be created there, log to stderr only instead of failing to start.
+_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+log_file = os.path.join(local_index.home_dir(), "mcp_dblp_server.log")
+try:
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    _log_handlers.insert(0, logging.FileHandler(log_file))
+except OSError:
+    log_file = None
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stderr)],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger("mcp_dblp")
 
@@ -51,6 +50,70 @@ try:
 except Exception:
     version_str = "x.x.x"  # Anonymous fallback version
     logger.warning(f"Using default version: {version_str}")
+
+
+def _first_start_wait() -> float:
+    """Seconds a tool call waits for the first-start download (MCP_DBLP_FIRST_START_WAIT)."""
+    try:
+        return max(0.0, float(os.environ.get("MCP_DBLP_FIRST_START_WAIT", "40")))
+    except ValueError:
+        return 40.0
+
+
+# Answers of _dispatch_tool that report a failure (returned with is_error=True)
+_ERROR_PREFIXES = ("Error", "Unknown tool:", "Failed to add entry")
+
+
+def _tool_result(content: list[types.TextContent], error: bool = False) -> types.CallToolResult:
+    return types.CallToolResult(content=content, is_error=error)
+
+
+_JSON_TYPES = {"string": (str,), "number": (int, float), "integer": (int,), "boolean": (bool,)}
+
+
+def _argument_error(schema: dict | None, arguments: dict) -> str | None:
+    """Check arguments against a tool's (flat) input schema.
+
+    The v1 SDK validated tool arguments against the input schema; the v2 low-level
+    Server only advertises the schema, so the check happens here."""
+    if not schema:
+        return None
+    for key in schema.get("required", []):
+        if arguments.get(key) is None:  # missing or null
+            return f"Input validation error: '{key}' is a required property"
+    properties = schema.get("properties", {})
+    for key, value in arguments.items():
+        expected = properties.get(key, {}).get("type")
+        allowed = _JSON_TYPES.get(expected)
+        if allowed is None or value is None:
+            continue
+        if not isinstance(value, allowed) or (expected != "boolean" and isinstance(value, bool)):
+            return (
+                f"Input validation error: {value!r} is not of type '{expected}' (argument '{key}')"
+            )
+    return None
+
+
+# Longest tool answer in characters (about 15k tokens); longer lists are cut at a result
+# boundary, since clients such as Claude Code reject oversized tool output outright.
+MAX_OUTPUT_CHARS = 60_000
+
+
+def _cap_output(result: list[types.TextContent]) -> list[types.TextContent]:
+    """Truncate an oversized result list at a result boundary and say so."""
+    if not result or len(result[0].text) <= MAX_OUTPUT_CHARS:
+        return result
+    text = result[0].text
+    cut = text.rfind("\n\n", 0, MAX_OUTPUT_CHARS)
+    cut = cut if cut > 0 else MAX_OUTPUT_CHARS
+    shown = text[:cut].count("DBLP key: ")
+    total = text.count("DBLP key: ")
+    note = (
+        f"\n\n[Output truncated: showing {shown} of {total} results to stay within the "
+        "client's size limit. Use a smaller max_results or narrow the search "
+        "(year_from/year_to, venue_filter).]"
+    )
+    return [types.TextContent(type="text", text=text[:cut] + note)] + result[1:]
 
 
 def export_bibtex_entries(entries, path):
@@ -71,10 +134,11 @@ def export_bibtex_entries(entries, path):
     return path
 
 
-async def serve() -> None:
-    """Main server function to handle MCP requests"""
-
-    server = Server("mcp-dblp")
+def create_server(backend) -> Server:
+    """The MCP server with all tools; every tool handler goes through backend (local
+    index or web API, see backend.py).  A backend that is not ready (index still
+    downloading) raises IndexUnavailable; the caller then gets that message, and the
+    usage instructions wait for the first call that actually answers."""
 
     # Session-scoped buffer for BibTeX entries
     # Key: citation_key, Value: full bibtex string
@@ -91,9 +155,8 @@ async def serve() -> None:
     except Exception:
         _instructions_text = ""
 
-    @server.list_tools()
-    async def list_tools() -> list[types.Tool]:
-        """List all available DBLP tools with detailed descriptions."""
+    def _tools() -> list[types.Tool]:
+        """All DBLP tools with detailed descriptions."""
         return [
             types.Tool(
                 name="search",
@@ -102,9 +165,9 @@ async def serve() -> None:
                     "Arguments:\n"
                     "  - query (string, required): A query string that may include boolean operators 'and' and 'or' (case-insensitive).\n"
                     "    For example, 'Swin and Transformer'. Parentheses are not supported.\n"
-                    "  - max_results (number, optional): Maximum number of publications to return. Default is 10.\n"
-                    "  - year_from (number, optional): Lower bound for publication year.\n"
-                    "  - year_to (number, optional): Upper bound for publication year.\n"
+                    "  - max_results (integer, optional): Maximum number of publications to return. Default is 10.\n"
+                    "  - year_from (integer, optional): Lower bound for publication year.\n"
+                    "  - year_to (integer, optional): Upper bound for publication year.\n"
                     "  - venue_filter (string, optional): Case-insensitive substring filter for publication venues (e.g., 'iclr').\n"
                     "  - include_bibtex (boolean, optional): Whether to include BibTeX entries in the results. Default is false.\n"
                     "Returns a list of publication objects including title, authors, venue, year, type, doi, ee, and url."
@@ -113,9 +176,9 @@ async def serve() -> None:
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
-                        "max_results": {"type": "number"},
-                        "year_from": {"type": "number"},
-                        "year_to": {"type": "number"},
+                        "max_results": {"type": "integer"},
+                        "year_from": {"type": "integer"},
+                        "year_to": {"type": "integer"},
                         "venue_filter": {"type": "string"},
                         "include_bibtex": {"type": "boolean"},
                     },
@@ -129,9 +192,9 @@ async def serve() -> None:
                     "Arguments:\n"
                     "  - title (string, required): Full or partial title of the publication (case-insensitive).\n"
                     "  - similarity_threshold (number, required): A float between 0 and 1 where 1.0 means an exact match.\n"
-                    "  - max_results (number, optional): Maximum number of publications to return. Default is 10.\n"
-                    "  - year_from (number, optional): Lower bound for publication year.\n"
-                    "  - year_to (number, optional): Upper bound for publication year.\n"
+                    "  - max_results (integer, optional): Maximum number of publications to return. Default is 10.\n"
+                    "  - year_from (integer, optional): Lower bound for publication year.\n"
+                    "  - year_to (integer, optional): Upper bound for publication year.\n"
                     "  - venue_filter (string, optional): Case-insensitive substring filter for publication venues.\n"
                     "  - include_bibtex (boolean, optional): Whether to include BibTeX entries in the results. Default is false.\n"
                     "Returns a list of publication objects sorted by title similarity score."
@@ -141,9 +204,9 @@ async def serve() -> None:
                     "properties": {
                         "title": {"type": "string"},
                         "similarity_threshold": {"type": "number"},
-                        "max_results": {"type": "number"},
-                        "year_from": {"type": "number"},
-                        "year_to": {"type": "number"},
+                        "max_results": {"type": "integer"},
+                        "year_from": {"type": "integer"},
+                        "year_to": {"type": "integer"},
                         "venue_filter": {"type": "string"},
                         "include_bibtex": {"type": "boolean"},
                     },
@@ -157,8 +220,10 @@ async def serve() -> None:
                     "Arguments:\n"
                     "  - author_name (string, required): Full or partial author name (case-insensitive).\n"
                     "  - similarity_threshold (number, required): A float between 0 and 1 where 1.0 means an exact match.\n"
-                    "  - max_results (number, optional): Maximum number of publications to return. Default is 20.\n"
+                    "  - max_results (integer, optional): Maximum number of publications to return. Default is 20.\n"
                     "  - include_bibtex (boolean, optional): Whether to include BibTeX entries in the results. Default is false.\n"
+                    "  - year_from (integer, optional): Only publications from this year on.\n"
+                    "  - year_to (integer, optional): Only publications up to this year.\n"
                     "Returns a dictionary with keys: name, publication_count, publications, and stats (which includes top venues, years, and types)."
                 ),
                 inputSchema={
@@ -166,8 +231,10 @@ async def serve() -> None:
                     "properties": {
                         "author_name": {"type": "string"},
                         "similarity_threshold": {"type": "number"},
-                        "max_results": {"type": "number"},
+                        "max_results": {"type": "integer"},
                         "include_bibtex": {"type": "boolean"},
+                        "year_from": {"type": "integer"},
+                        "year_to": {"type": "integer"},
                     },
                     "required": ["author_name", "similarity_threshold"],
                 },
@@ -194,13 +261,15 @@ async def serve() -> None:
             types.Tool(
                 name="set_dblp_mirror",
                 description=(
-                    "Switch the DBLP server to a mirror. Use this if requests to the default dblp.org are timing out or failing.\n"
+                    "Choose the dblp.org mirror for the web fallback. With the local DBLP index "
+                    "(the default), searches never contact dblp.org, so this is rarely needed: it only "
+                    "affects BibTeX keys missing from the local index, and the web backend "
+                    "(MCP_DBLP_INDEX=http).\n"
                     "Available mirrors:\n"
                     "  - dblp.org (default)\n"
                     "  - dblp.uni-trier.de\n"
                     "  - dblp.dagstuhl.de\n"
-                    "All three are official DBLP mirrors maintained by Schloss Dagstuhl and University of Trier.\n"
-                    "The chosen mirror applies to all subsequent DBLP requests in this session.\n"
+                    "Other hosts are rejected.\n"
                     "Arguments:\n"
                     "  - host (string, required): Mirror hostname (e.g., 'dblp.uni-trier.de')."
                 ),
@@ -256,6 +325,13 @@ async def serve() -> None:
             ),
         ]
 
+    tools = _tools()
+    schemas = {tool.name: tool.input_schema for tool in tools}
+
+    async def handle_list_tools(ctx, params) -> types.ListToolsResult:
+        """List all available DBLP tools with detailed descriptions."""
+        return types.ListToolsResult(tools=tools)
+
     def _maybe_append_instructions(result: list[types.TextContent]) -> list[types.TextContent]:
         """Append usage instructions to the first tool call response in a session."""
         nonlocal instructions_delivered
@@ -269,11 +345,43 @@ async def serve() -> None:
             )
         return result
 
-    @server.call_tool()
-    async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-        """Handle tool calls from clients"""
-        result = _dispatch_tool(name, arguments)
-        return _maybe_append_instructions(result)
+    async def handle_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+        """Handle tool calls from clients.
+
+        While the first-start download is running, a call waits up to
+        MCP_DBLP_FIRST_START_WAIT seconds (default 40, below common client timeouts)
+        for the index, so that a model without a sleep tool does not poll in a tight
+        loop."""
+        name = params.name
+        # a null optional argument means "not given": drop it so the default applies
+        arguments = {k: v for k, v in (params.arguments or {}).items() if v is not None}
+        problem = _argument_error(schemas.get(name), arguments)
+        if problem:
+            logger.warning(f"Tool call {name}: {problem}")
+            return _tool_result([types.TextContent(type="text", text=problem)], error=True)
+        wait = _first_start_wait()
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                result = _cap_output(_dispatch_tool(name, arguments))
+                break
+            except IndexUnavailable as e:
+                in_progress = getattr(backend, "fetch_in_progress", lambda: False)()
+                if in_progress and time.monotonic() < deadline:
+                    await asyncio.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
+                    continue
+                # no answer yet (index downloading): keep the usage instructions for the
+                # first call that actually answers
+                message = str(e)
+                if in_progress and wait > 0:
+                    message += (
+                        f" This call waited {wait:.0f} s for it; the download continues in "
+                        "the background, so calling a tool again keeps waiting."
+                    )
+                logger.warning(f"Tool call {name}: {message}")
+                return _tool_result([types.TextContent(type="text", text=message)])
+        failed = bool(result) and result[0].text.startswith(_ERROR_PREFIXES)
+        return _tool_result(_maybe_append_instructions(result), error=failed)
 
     def _dispatch_tool(name: str, arguments: dict) -> list[types.TextContent]:
         """Dispatch a tool call and return the result."""
@@ -281,14 +389,8 @@ async def serve() -> None:
             logger.info(f"Tool call: {name} with arguments {arguments}")
             match name:
                 case "search":
-                    if "query" not in arguments:
-                        return [
-                            types.TextContent(
-                                type="text", text="Error: Missing required parameter 'query'"
-                            )
-                        ]
                     include_bibtex = arguments.get("include_bibtex", False)
-                    result = search(
+                    result = backend.search(
                         query=arguments.get("query"),
                         max_results=arguments.get("max_results", 10),
                         year_from=arguments.get("year_from"),
@@ -311,15 +413,8 @@ async def serve() -> None:
                             )
                         ]
                 case "fuzzy_title_search":
-                    if "title" not in arguments or "similarity_threshold" not in arguments:
-                        return [
-                            types.TextContent(
-                                type="text",
-                                text="Error: Missing required parameter 'title' or 'similarity_threshold'",
-                            )
-                        ]
                     include_bibtex = arguments.get("include_bibtex", False)
-                    result = fuzzy_title_search(
+                    result = backend.fuzzy_title_search(
                         title=arguments.get("title"),
                         similarity_threshold=arguments.get("similarity_threshold"),
                         max_results=arguments.get("max_results", 10),
@@ -343,19 +438,14 @@ async def serve() -> None:
                             )
                         ]
                 case "get_author_publications":
-                    if "author_name" not in arguments or "similarity_threshold" not in arguments:
-                        return [
-                            types.TextContent(
-                                type="text",
-                                text="Error: Missing required parameter 'author_name' or 'similarity_threshold'",
-                            )
-                        ]
                     include_bibtex = arguments.get("include_bibtex", False)
-                    result = get_author_publications(
+                    result = backend.get_author_publications(
                         author_name=arguments.get("author_name"),
                         similarity_threshold=arguments.get("similarity_threshold"),
                         max_results=arguments.get("max_results", 20),
                         include_bibtex=include_bibtex,
+                        year_from=arguments.get("year_from"),
+                        year_to=arguments.get("year_to"),
                     )
                     pub_count = result.get("publication_count", 0)
                     publications = result.get("publications", [])
@@ -375,13 +465,7 @@ async def serve() -> None:
                             )
                         ]
                 case "get_venue_info":
-                    if "venue_name" not in arguments:
-                        return [
-                            types.TextContent(
-                                type="text", text="Error: Missing required parameter 'venue_name'"
-                            )
-                        ]
-                    result = get_venue_info(venue_name=arguments.get("venue_name"))
+                    result = backend.get_venue_info(venue_name=arguments.get("venue_name"))
                     return [
                         types.TextContent(
                             type="text",
@@ -397,13 +481,11 @@ async def serve() -> None:
                                 text="Error: Missing required parameter 'host'",
                             )
                         ]
-                    new_url = set_dblp_base_url(host)
-                    return [
-                        types.TextContent(
-                            type="text",
-                            text=f"DBLP mirror switched to {new_url}. All subsequent requests will use this mirror.",
-                        )
-                    ]
+                    try:
+                        message = backend.set_mirror(host)
+                    except ValueError as e:
+                        message = f"Error: {e}"
+                    return [types.TextContent(type="text", text=message)]
 
                 case "add_bibtex_entry":
                     dblp_key = arguments.get("dblp_key")
@@ -418,25 +500,8 @@ async def serve() -> None:
                             )
                         ]
 
-                    # Sanitize dblp_key: remove .bib extension and URL prefix if present
-                    dblp_key = dblp_key.strip()
-                    if dblp_key.endswith(".bib"):
-                        dblp_key = dblp_key[:-4]
-                    # Strip any DBLP mirror prefix (derived dynamically)
-                    known_hosts = [dblp_client.DBLP_BASE_URL] + [
-                        m for m in dblp_client.DBLP_MIRRORS if m != dblp_client.DBLP_BASE_URL
-                    ]
-                    for host in known_hosts:
-                        prefix = host.replace("https://", "") + "/rec/"
-                        if dblp_key.startswith(prefix):
-                            dblp_key = dblp_key[len(prefix) :]
-                            break
-
-                    # Construct DBLP BibTeX URL using current base URL
-                    url = f"{dblp_client.DBLP_BASE_URL}/rec/{dblp_key}.bib"
-
-                    # Fetch BibTeX
-                    bibtex = fetch_and_process_bibtex(url, citation_key)
+                    # Fetch BibTeX (key sanitized by the backend: .bib extension, URL prefix)
+                    bibtex = backend.bibtex_for_citation(dblp_key, citation_key)
 
                     # Check for fetch errors (function returns strings starting with % Error)
                     if bibtex.strip().startswith("% Error"):
@@ -486,6 +551,16 @@ async def serve() -> None:
                             )
                         ]
 
+                    path = os.path.expanduser(path)
+                    if not os.path.isabs(path):
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Error: 'path' must be an absolute path (got '{path}'). "
+                                "The collection is unchanged.",
+                            )
+                        ]
+
                     # Convert dict values to list for writing
                     entries = list(bibtex_buffer.values())
                     filepath = export_bibtex_entries(entries, path)
@@ -500,10 +575,25 @@ async def serve() -> None:
                     ]
                 case _:
                     return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
+        except IndexUnavailable:
+            raise
         except Exception as e:
             logger.error(f"Tool execution failed: {str(e)}", exc_info=True)
             return [types.TextContent(type="text", text=f"Error executing {name}: {str(e)}")]
 
+    return Server(
+        "mcp-dblp",
+        version=version_str,
+        on_list_tools=handle_list_tools,
+        on_call_tool=handle_call_tool,
+    )
+
+
+async def serve() -> None:
+    """Main server function to handle MCP requests"""
+    # Without an index this starts the download in a background thread; tool calls then
+    # return its progress (IndexUnavailable) instead of blocking.
+    server = create_server(select_backend(auto_fetch=True))
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -534,6 +624,8 @@ def format_results(results):
         formatted.append(f"   Venue: {venue} ({year})")
         if dblp_key:
             formatted.append(f"   DBLP key: {dblp_key}")
+        if result.get("match"):
+            formatted.append(f"   Matched: {result['match']}")
         formatted.append("")
     return "\n".join(formatted)
 
@@ -573,6 +665,8 @@ def format_results_with_bibtex(results):
         formatted.append(f"   Venue: {venue} ({year})")
         if dblp_key:
             formatted.append(f"   DBLP key: {dblp_key}")
+        if result.get("match"):
+            formatted.append(f"   Matched: {result['match']}")
         if "bibtex" in result and result["bibtex"]:
             formatted.append("\n   BibTeX:")
             bibtex_lines = result["bibtex"].strip().split("\n")
