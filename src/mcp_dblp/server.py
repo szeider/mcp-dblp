@@ -239,10 +239,14 @@ def create_server(backend) -> Server:
                 name="fuzzy_title_search",
                 description=(
                     "Find publications by title: also when the title is misspelled, abbreviated or "
-                    "only its beginning is known. Results are ranked by title similarity (1.0 = "
-                    "identical) and show [Similarity], authors, venue (year) and the DBLP key. The "
-                    "same title often appears several times (arXiv preprint in CoRR, conference and "
-                    "journal version, reprints): choose by venue and year."
+                    "only its beginning is known. Case, accents and punctuation do not matter. "
+                    "Results are ranked by title similarity and show [Similarity: x, how], authors, "
+                    "venue (year) and the DBLP key, where how is 'same title' (1.00), 'title contains "
+                    "the query' (a longer, different title; 0.5 plus half the share of the title the "
+                    "query covers) or 'similar title' (spelling differences). If no result is the "
+                    "same title, the paper you look for may not be in DBLP. The same title often "
+                    "appears several times (arXiv preprint in CoRR, conference and journal version, "
+                    "reprints): choose by venue and year."
                 ),
                 inputSchema={
                     "type": "object",
@@ -791,6 +795,14 @@ def format_results(results):
     return "\n".join(formatted)
 
 
+def similarity_label(result) -> str:
+    """'Similarity: 0.81, title contains the query' (the kind only from the local index)."""
+    label = f"Similarity: {result.get('similarity', 0.0):.2f}"
+    if result.get("title_match"):
+        label += f", {result['title_match']}"
+    return label
+
+
 def format_results_with_similarity(results):
     if not results:
         return "No results found."
@@ -800,9 +812,8 @@ def format_results_with_similarity(results):
         authors = ", ".join(result.get("authors", []))
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
-        similarity = result.get("similarity", 0.0)
         dblp_key = result.get("dblp_key", "")
-        formatted.append(f"{i + 1}. {title} [Similarity: {similarity:.2f}]")
+        formatted.append(f"{i + 1}. {title} [{similarity_label(result)}]")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
         if dblp_key:
@@ -845,9 +856,8 @@ def format_results_with_similarity_and_bibtex(results):
         authors = ", ".join(result.get("authors", []))
         venue = result.get("venue", "Unknown venue")
         year = result.get("year", "")
-        similarity = result.get("similarity", 0.0)
         dblp_key = result.get("dblp_key", "")
-        formatted.append(f"{i + 1}. {title} [Similarity: {similarity:.2f}]")
+        formatted.append(f"{i + 1}. {title} [{similarity_label(result)}]")
         formatted.append(f"   Authors: {authors}")
         formatted.append(f"   Venue: {venue} ({year})")
         if dblp_key:

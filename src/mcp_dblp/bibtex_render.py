@@ -2,7 +2,8 @@
 
 Renders an entry from the fields of the local SQLite index (see local_index.py)
 so that it matches https://dblp.org/rec/<key>.bib byte for byte, except for the
-timestamp line (the dump only carries the modification date, not the time).
+timestamp line (the dump only carries the modification date, not the time) and
+titles, where words with inner capitals are braced as well (_protect_inner, 2.0.2).
 
 Pure functions, no network.
 """
@@ -156,19 +157,45 @@ def to_latex(s: str) -> str:
 PROTECT = re.compile(r"\(?[A-Z][A-Z0-9()\-./:]*|\([0-9][A-Z0-9()\-./:]*")
 
 
-def protect(text: str) -> str:
+def protect(text: str, inner_caps: bool = False) -> str:
     """Brace all-caps tokens (whitespace-delimited) such as ACM, {(IMLP)}, {K-12}.
 
     Tokens with a lowercase letter, a comma, or other punctuation stay as they
     are; a token ending in '.' (abbreviation) and a one-letter first word stay too.
+    That is dblp's rule.  With inner_caps (titles), other tokens are passed to
+    _protect_inner as well.
     """
     toks = text.split(" ")
     out = []
     for i, tok in enumerate(toks):
         if PROTECT.fullmatch(tok) and not tok.endswith(".") and not (i == 0 and len(tok) == 1):
             tok = "{" + tok + "}"
+        elif inner_caps:
+            tok = _protect_inner(tok)
         out.append(tok)
     return " ".join(out)
+
+
+_NO_PROTECT = re.compile(r"[{}\\$^_-]")  # math, TeX, markup placeholders
+_EDGES = re.compile(r"^([(\[\"'“‘]*)(.*?)([)\]\"'”’.,:;!?]*)$", re.S)
+
+
+def _protect_inner(tok: str) -> str:
+    """Brace the parts of a title token that sentence-case bibliography styles would
+    wrongly lowercase, beyond dblp's all-caps rule: parts with a capital after their
+    first character ({CaDiCaL}, {McCarthy's}, {iPhone}, {3D}, the {DRUP} of
+    {DRUP}-based) and one-letter capitals in compounds ({Q}-Learning).  Parts that only
+    start with a capital (Multi-Agent, Keller's, Lean) stay as they are: proper nouns
+    cannot be told apart from ordinary title-case words."""
+    if _NO_PROTECT.search(tok):
+        return tok
+    lead, core, trail = _EDGES.match(tok).groups()
+    parts = core.split("-")
+    compound = len(parts) > 1
+    for i, p in enumerate(parts):
+        if any(ch.isupper() for ch in p[1:]) or (compound and len(p) == 1 and p.isupper()):
+            parts[i] = "{" + p + "}"
+    return lead + "-".join(parts) + trail
 
 
 TAG = re.compile(r"</?(?:i|b|u|tt|em|sub|sup)>")
@@ -185,7 +212,7 @@ PH_OPEN = {"\ue000": "\\({}_{\\mbox{", "\ue002": "\\({}^{\\mbox{", "\ue004": "\\
 PH_CLOSE = {"\ue000": "}}\\)", "\ue002": "}}\\)", "\ue004": "}"}
 
 
-def text_field(s: str) -> str:
+def text_field(s: str, inner_caps: bool = False) -> str:
     """Title-like field: protect capitals, LaTeX-escape, convert markup.
 
     If the stored value kept dblp's inline XML markup (an XML fragment), then
@@ -196,7 +223,7 @@ def text_field(s: str) -> str:
     marked = bool(TAG.search(s))
     if marked:
         s = html.unescape(TAG.sub(lambda m: PH.get(m.group(0), ""), s))
-    out = to_latex(protect(s))
+    out = to_latex(protect(s, inner_caps))
     if marked:
         out = PH_LATEX.sub(lambda m: PH_OPEN[m.group(1)] + m.group(2) + PH_CLOSE[m.group(1)], out)
     return out
@@ -298,7 +325,8 @@ def render(rec: dict, crossref_rec: dict | None = None, key_prefix: str = KEY_PR
     if editors:
         fields.append(("editor", (" and\n" + INDENT).join(name_latex(e) for e in editors), False))
     if rec.get("title"):
-        fields.append(("title", text_field(strip_period(rec["title"])), True))
+        # titles only: styles change the case of titles, not of venues or publishers
+        fields.append(("title", text_field(strip_period(rec["title"]), inner_caps=True), True))
 
     if typ in ("inproceedings", "incollection"):
         bt = cr.get("title") or rec.get("booktitle")

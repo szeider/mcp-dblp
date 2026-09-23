@@ -8,7 +8,7 @@ import pytest
 from mcp.client import Client
 
 from mcp_dblp import backend as backend_mod
-from mcp_dblp import local_index
+from mcp_dblp import bibtex_render, local_index
 from mcp_dblp.local_client import LocalDblp
 from mcp_dblp.server import create_server
 
@@ -181,6 +181,41 @@ def _xml() -> str:
             journal="Decoys",
         )
     )
+    # beta test: inner capitals in titles, and titles for the fuzzy match kinds
+    recs.append(
+        _rec(
+            "inproceedings",
+            "conf/cav/Biere24",
+            2024,
+            "CaDiCaL 2.0.",
+            ["Armin Biere"],
+            booktitle="CAV",
+        )
+    )
+    recs += [
+        _rec("article", f"journals/mt/M{i}", 2010 + i, t, ["Mat Theo"], journal="Decoys")
+        for i, t in enumerate(["A random matching theory.", "Infinite matching theory."])
+    ]
+    recs.append(
+        _rec(
+            "article",
+            "journals/sg/S1",
+            2015,
+            "Subgraph Coloring Games.",
+            ["Sub Graph"],
+            journal="Decoys",
+        )
+    )
+    recs.append(
+        _rec(
+            "inproceedings",
+            "conf/stoc/Cook71",
+            1971,
+            "The Complexity of Theorem-Proving Procedures",
+            ["Stephen A. Cook"],
+            booktitle="STOC",
+        )
+    )
     return HEADER + "".join(recs) + "</dblp>\n"
 
 
@@ -340,3 +375,60 @@ async def test_server_states_release_and_rejects_ambiguous_input(uindex):
             )
         )
         assert "Showing the newest 5 of 120" in t
+
+
+# ---------------------------------- beta test: capitals in titles, fuzzy title match kinds
+
+
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        (
+            "Revisiting DRUP-based Interpolants with CaDiCaL 2.0",
+            "Revisiting {DRUP}-based Interpolants with {CaDiCaL} 2.0",
+        ),
+        ("McCarthy's LaTeX on the iPhone in 3D", "{McCarthy's} {LaTeX} on the {iPhone} in {3D}"),
+        ("Q-Learning for Multi-Agent k-SAT", "{Q}-Learning for Multi-Agent k-{SAT}"),
+        ("Graph Minors. II. Tree-Width", "Graph Minors. {II}. Tree-Width"),
+        # proper nouns cannot be told from ordinary title-case words: unchanged
+        ("Keller's Conjecture and the Lean Library", "Keller's Conjecture and the Lean Library"),
+    ],
+)
+def test_title_protects_inner_capitals(title, expected):
+    assert bibtex_render.text_field(title, inner_caps=True) == expected
+
+
+def test_inner_capitals_only_in_titles(udb):
+    math = "Ramsey Numbers $R(C_4, K_9)$"
+    assert bibtex_render.text_field(math, inner_caps=True) == bibtex_render.text_field(math)
+    assert bibtex_render.text_field("LIPIcs") == "LIPIcs"  # venues keep dblp's rule
+    assert "  title        = {{CaDiCaL} 2.0},\n" in udb.bibtex_for_key("conf/cav/Biere24")
+
+
+def test_fuzzy_title_match_kinds(udb):
+    # case, hyphens and punctuation do not matter: the same words score 1.0
+    r = udb.fuzzy_title_search("the complexity of theorem proving procedures", 0.9)
+    assert (r[0]["dblp_key"], r[0]["similarity"], r[0]["title_match"]) == (
+        "conf/stoc/Cook71",
+        1.0,
+        "same title",
+    )
+    # a longer title containing a short query is no near-exact hit ...
+    assert udb.fuzzy_title_search("Matching Theory", 0.9) == []
+    r = udb.fuzzy_title_search("Matching Theory", 0.7)
+    assert {x["title_match"] for x in r} == {"title contains the query"}
+    assert all(x["similarity"] < 0.85 for x in r)
+    # ... and containment respects word boundaries: 'subgraph coloring' is only similar
+    r = udb.fuzzy_title_search("Graph Coloring", 0.5)
+    assert [x["title_match"] for x in r if x["dblp_key"] == "journals/sg/S1"] == ["similar title"]
+
+
+@pytest.mark.asyncio
+async def test_server_shows_title_match_kind(uindex):
+    b = backend_mod.IndexBackend(path=str(uindex))
+    async with Client(create_server(b)) as c:
+        r = await c.call_tool(
+            "fuzzy_title_search",
+            {"title": "The Complexity of Theorem-Proving Procedures.", "similarity_threshold": 0.9},
+        )
+        assert "[Similarity: 1.00, same title]" in _text(r)

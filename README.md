@@ -19,7 +19,7 @@ Since version 2.0, MCP-DBLP works from a local copy of DBLP instead of the dblp.
 - Boolean search with `and` and `or` (no parentheses), filtered by year and venue
 - Fuzzy matching of titles and author names
 - Author-aware ranking: each search result names the query words that matched an author, the title, or the venue, and marks prefix-only matches
-- BibTeX in DBLP's own format, rendered from DBLP's data; it matches the `.bib` export on dblp.org except for the time of day in the `timestamp` field
+- BibTeX in DBLP's own format, rendered from DBLP's data; it matches the `.bib` export on dblp.org except for the time of day in the `timestamp` field, and titles also brace words with inner capitals (`{CaDiCaL}`, `{DRUP}-based`) so that bibliography styles do not lowercase them
 - Export of the collected entries to a `.bib` file, written by the server
 - A new local index every month, installed with `mcp-dblp-index update`
 
@@ -160,7 +160,7 @@ Search DBLP for publications. All query words must occur in the title, the autho
 
 ### fuzzy_title_search
 
-Find publications by title, also when the title is misspelled or only its beginning is known. Results are ranked by title similarity.
+Find publications by title, also when the title is misspelled or only its beginning is known. Results are ranked by title similarity and labelled "same title", "title contains the query" or "similar title".
 
 **Parameters:**
 

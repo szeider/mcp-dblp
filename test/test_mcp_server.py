@@ -234,27 +234,21 @@ class TestMCPServerIntegration:
 class TestFuzzySimilarityLogic:
     """Unit tests for fuzzy title matching similarity logic (no API calls)."""
 
-    def test_substring_match_scores_high(self):
-        """Short query that is a substring of a long title should score >= 0.8."""
+    def test_substring_match_scores_by_coverage(self):
+        """A title containing the query scores by coverage: short queries in long titles
+        stay findable at low thresholds, longer containing titles stay below 0.9."""
         import difflib
 
+        from mcp_dblp.local_client import _fuzzy_ratio
+
         query = "graph coloring"
-        long_title = "A Survey on Graph Coloring Problems and Their Applications"
-
-        query_lower = query.lower()
-        title_lower = long_title.lower()
-
-        # Old logic: SequenceMatcher ratio penalizes short queries
-        old_ratio = difflib.SequenceMatcher(None, query_lower, title_lower).ratio()
-        assert old_ratio < 0.6, f"Old ratio {old_ratio} should be below 0.6 (the bug)"
-
-        # New logic: substring containment gives at least 0.8
-        if query_lower in title_lower:
-            new_ratio = max(0.8, len(query_lower) / len(title_lower))
-        else:
-            new_ratio = old_ratio
-
-        assert new_ratio >= 0.8, f"New ratio {new_ratio} should be >= 0.8 for substring match"
+        long_title = "a survey on graph coloring problems and their applications"
+        # SequenceMatcher alone penalizes short queries (found nothing at 0.5 in 1.3)
+        assert difflib.SequenceMatcher(None, query, long_title).ratio() < 0.4
+        assert 0.5 < _fuzzy_ratio(query, long_title) < 0.7
+        # 'Matching Theory' must not look like a near-exact hit for longer titles
+        assert _fuzzy_ratio("matching theory", "a random matching theory.") < 0.9
+        assert _fuzzy_ratio("matching theory", "matching theory.") > 0.95
 
     def test_non_substring_uses_sequencematcher(self):
         """Non-substring queries should fall back to SequenceMatcher."""

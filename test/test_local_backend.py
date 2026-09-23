@@ -147,7 +147,9 @@ def test_fuzzy_title_search(db):
     assert 0.8 <= r[0]["similarity"] < 1.0
     r = db.fuzzy_title_search("Graph Coloring", 0.5)
     assert r[0]["dblp_key"] == "conf/sat/ManyaG21"
-    assert r[0]["similarity"] >= 0.8  # substring match
+    # 'graph coloring' inside 'graph coloring with maxsat': 0.5 + 0.5 * coverage
+    assert r[0]["similarity"] == pytest.approx(0.5 + 0.5 * 14 / 26)
+    assert r[0]["title_match"] == "title contains the query"
     assert db.fuzzy_title_search("Graph Coloring", 0.5, year_to=2020) == []
 
 

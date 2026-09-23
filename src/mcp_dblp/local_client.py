@@ -217,13 +217,44 @@ def sqlite_ro_uri(path: str) -> str:
     return "file:" + urllib.request.pathname2url(os.path.abspath(path)) + "?mode=ro"
 
 
-def _fuzzy_ratio(query_lower: str, title_lower: str) -> float:
-    """Title similarity exactly as in dblp_client.fuzzy_title_search.  A title containing
-    the query scores at least 0.8, graded by coverage: all titles containing 'Attention
-    is all' used to tie at 0.8, and the newest won instead of 'Attention is All you Need'."""
-    if query_lower in title_lower:
-        return 0.8 + 0.2 * len(query_lower) / len(title_lower) if title_lower else 0
-    return difflib.SequenceMatcher(None, query_lower, title_lower).ratio()
+SAME_TITLE, CONTAINS_QUERY, SIMILAR_TITLE = (
+    "same title",
+    "title contains the query",
+    "similar title",
+)
+
+
+def _norm_title(s: str) -> str:
+    """A title as its words: case, accents and punctuation dropped, so 'Theorem-Proving
+    Procedures.' equals 'theorem proving procedures'."""
+    return " ".join(_tokens(s))
+
+
+def _title_match(q: str, t: str, threshold: float = 0.0) -> tuple[float, str]:
+    """Similarity of two normalized titles (_norm_title) and how they match.
+
+    Same words: 1.0.  The query's words inside a longer title: 0.5 + 0.5 * (the share of
+    the title they cover).  That is at least the SequenceMatcher ratio 2c/(1+c), so a
+    short query in a long title still shows up at a low threshold, while a longer title
+    containing a short query ('A random matching theory' for 'Matching Theory': 0.81)
+    stays below a near-exact threshold such as 0.9.  Otherwise the SequenceMatcher ratio
+    (typos, abbreviations), 0.0 when its upper bounds are below threshold already.
+    History: a flat 0.8 for containment (1.4-2.0.0) made containing titles tie, 0.8 + 0.2c
+    (2.0.1) let them pass 0.9, and raw-string containment matched inside words
+    ('graph coloring' in 'subgraph coloring')."""
+    if q == t:
+        return 1.0, SAME_TITLE
+    if t and f" {q} " in f" {t} ":
+        return 0.5 + 0.5 * len(q) / len(t), CONTAINS_QUERY
+    sm = difflib.SequenceMatcher(None, q, t)
+    if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
+        return 0.0, SIMILAR_TITLE  # upper bounds of ratio(): cannot reach threshold
+    return sm.ratio(), SIMILAR_TITLE
+
+
+def _fuzzy_ratio(query: str, title: str) -> float:
+    """Title similarity of fuzzy_title_search for raw strings (_title_match)."""
+    return _title_match(_norm_title(query), _norm_title(title))[0]
 
 
 # ------------------------------------------------- search: how a result matched the query
@@ -776,20 +807,13 @@ class LocalDblp:
             for pid, _ in self._fts_ids(match, pool, *filt):
                 cand[pid] = None
 
-        tl = title.lower()
+        qn = " ".join(toks)  # _norm_title(title)
         out = []
         for pub in self._fetch(list(cand)):
-            ptl = pub["title"].lower()
-            if tl not in ptl:
-                sm = difflib.SequenceMatcher(None, tl, ptl)
-                if (
-                    sm.real_quick_ratio() < similarity_threshold
-                    or sm.quick_ratio() < similarity_threshold
-                ):
-                    continue  # upper bounds of ratio(); result identical to a full ratio()
-            ratio = _fuzzy_ratio(tl, ptl)
+            ratio, how = _title_match(qn, _norm_title(pub["title"]), similarity_threshold)
             if ratio >= similarity_threshold:
                 pub["similarity"] = ratio
+                pub["title_match"] = how
                 out.append(pub)
         out.sort(key=lambda p: (-p["similarity"], -(p["year"] or 0)))
         out = out[:max_results]

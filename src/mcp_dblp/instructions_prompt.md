@@ -20,7 +20,7 @@ The entries are DBLP's own BibTeX. Never write BibTeX for a paper that is in DBL
 
 If the first search fails:
 1. Other title words, or field prefixes: `search("author:Smith title:transformer")`
-2. The title: `fuzzy_title_search("Attention is All You Need", similarity_threshold=0.7)`. It tolerates typos and partial titles.
+2. The title: `fuzzy_title_search("Attention is All You Need", similarity_threshold=0.7)`. It tolerates typos and partial titles, and labels each result "same title", "title contains the query" (a longer, different title) or "similar title".
 3. The author: `get_author_publications("Yoshua Bengio", similarity_threshold=0.8, year_from=2013, year_to=2013)`. The first lines of the answer name the DBLP person shown and the other persons with that name; DBLP numbers namesakes ("Wei Wang 0010").
 4. Name variations: full name, surname only, other spellings (accents do not matter).
 
