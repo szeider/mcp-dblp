@@ -366,8 +366,9 @@ def fuzzy_title_search(
         title_lower = title.lower()
         pub_title_lower = pub_title.lower()
         if title_lower in pub_title_lower:
-            # Full substring match — score reflects coverage but always at least 0.8
-            ratio = max(0.8, len(title_lower) / len(pub_title_lower)) if pub_title_lower else 0
+            # Full substring match: at least 0.8, graded by coverage so that among the
+            # titles containing a partial title the shortest (usually the original) wins
+            ratio = 0.8 + 0.2 * len(title_lower) / len(pub_title_lower) if pub_title_lower else 0
         else:
             ratio = difflib.SequenceMatcher(None, title_lower, pub_title_lower).ratio()
         if ratio >= similarity_threshold:

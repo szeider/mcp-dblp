@@ -105,6 +105,9 @@ TYPES = [
 ]  # publ.type codes (local_index.TYPES)
 T_ARTICLE, T_INPROC, T_PROC = 0, 1, 2
 ID_SHIFT = 21  # publ.id = (year - 1900) << 21 | number within the year (local_index.py)
+# fuzzy_title_search: a title word in fewer titles than TYPO_DF may be misspelled; then
+# every word in fewer than VARIANT_DF titles also accepts close spellings
+TYPO_DF, VARIANT_DF = 50, 1000
 
 
 def _year_lo(year: int) -> int:
@@ -215,9 +218,11 @@ def sqlite_ro_uri(path: str) -> str:
 
 
 def _fuzzy_ratio(query_lower: str, title_lower: str) -> float:
-    """Title similarity exactly as in dblp_client.fuzzy_title_search."""
+    """Title similarity exactly as in dblp_client.fuzzy_title_search.  A title containing
+    the query scores at least 0.8, graded by coverage: all titles containing 'Attention
+    is all' used to tie at 0.8, and the newest won instead of 'Attention is All you Need'."""
     if query_lower in title_lower:
-        return max(0.8, len(query_lower) / len(title_lower)) if title_lower else 0
+        return 0.8 + 0.2 * len(query_lower) / len(title_lower) if title_lower else 0
     return difflib.SequenceMatcher(None, query_lower, title_lower).ratio()
 
 
@@ -529,10 +534,10 @@ class LocalDblp:
         """Split one AND-subquery into words and phrases plus an optional year.
 
         Supports "quoted phrases", field prefixes title:/author:/venue: (a prefix
-        applies to all following words until the next prefix), a trailing '$'
-        (dblp's exact-word marker, ignored) and a trailing '*' (prefix search).
-        A 4-digit year (1900-2099), bare or as year:YYYY, becomes a year constraint
-        (also after a field prefix, so 'author:Vaswani 2017' works).
+        applies to the next word or quoted phrase only, so 'venue:AAAI Szeider'
+        finds Szeider's AAAI papers), a trailing '$' (dblp's exact-word marker,
+        ignored) and a trailing '*' (prefix search).  A 4-digit year (1900-2099),
+        bare or as year:YYYY, becomes a year constraint.
         """
         items: list[_Item] = []
         year = None
@@ -550,6 +555,7 @@ class LocalDblp:
                 toks = _tokens(m.group(2))
                 if toks:
                     items.append(_Item(field, toks, False, True))
+                field = None
                 continue
             else:
                 word = m.group(3)
@@ -559,8 +565,9 @@ class LocalDblp:
                 continue
             if len(toks) == 1 and _YEAR_RE.match(toks[0]) and year is None:
                 year = int(toks[0])
-                continue
-            items.append(_Item(field, toks, star, False))
+            else:
+                items.append(_Item(field, toks, star, False))
+            field = None  # a prefix covers one word or phrase
         return items, year
 
     @staticmethod
@@ -735,6 +742,19 @@ class LocalDblp:
         pool = max(100, 10 * max_results)
 
         queries = [f"title : {_q(' '.join(toks))}"]  # whole title as a phrase
+        if any(df.get(w, 0) < TYPO_DF for w in sig):
+            # A misspelled word ('Atention is all you ned') breaks every AND query below,
+            # and the OR fallback drowns in common words: also accept close vocabulary
+            # terms for the rarer words.  Words of one or two letters are left out: a
+            # truncated 'al' for 'all' is itself a common token, so it would be required.
+            words = [w for w in sig if len(w) > 2] or sig
+            parts = [
+                "(" + " OR ".join(_q(v) for v in self._spelling_variants(w, col="title")) + ")"
+                if df.get(w, 0) < VARIANT_DF
+                else _q(w)
+                for w in words
+            ]
+            queries.append("title : (" + " AND ".join(parts) + ")")
         if known:
             queries.append("title : (" + " AND ".join(_q(w) for w in known) + ")")
         if len(known) > 3:
@@ -793,12 +813,12 @@ class LocalDblp:
         ).fetchall()
         return [(i, _split(a) + _split(e)) for i, a, e in rows]
 
-    def _spelling_variants(self, tok: str, n: int = 4) -> list[str]:
-        """tok plus the closest author-column vocabulary terms (same first 2 letters)."""
+    def _spelling_variants(self, tok: str, n: int = 4, col: str = "authors") -> list[str]:
+        """tok plus the closest vocabulary terms of FTS column col (same first 2 letters)."""
         lo = tok[:2]
         rows = self.conn.execute(
-            "SELECT term, doc FROM temp.fts_vocab WHERE col = 'authors' AND term >= ? AND term < ?",
-            (lo, _next_str(lo)),
+            "SELECT term, doc FROM temp.fts_vocab WHERE col = ? AND term >= ? AND term < ?",
+            (col, lo, _next_str(lo)),
         )
         letters = sorted(tok)
         scored = []
@@ -818,6 +838,9 @@ class LocalDblp:
         if not toks:
             return {}, {}
         qf = " ".join(toks)
+        # 'Wei Wang 0010' names one numbered dblp person; without a number, all
+        # persons of that name match equally
+        with_suffix = bool(_SUFFIX_RE.search(author_name.strip()))
 
         def collect(match, exact_only):
             ids: dict[str, list[int]] = {}
@@ -826,7 +849,7 @@ class LocalDblp:
                     ids.setdefault(nm, []).append(pid)
             sims = {}
             for nm in ids:
-                nf = " ".join(_tokens(_strip_suffix(nm)))
+                nf = " ".join(_tokens(nm if with_suffix else _strip_suffix(nm)))
                 if nf == qf:
                     sims[nm] = 1.0
                 elif not exact_only:
@@ -874,11 +897,11 @@ class LocalDblp:
         ranked = sorted(cands, key=lambda n: (-cands[n], -counts[n], n))
         best = ranked[0]
         lo, hi = self._id_range(year_from, year_to, None)  # ids start with the year
-        pub_ids = sorted(
+        in_range = sorted(
             (i for i in set(ids[best]) if (lo is None or i >= lo) and (hi is None or i <= hi)),
             reverse=True,
-        )[:max_results]  # id order = year order
-        pubs = self._fetch(pub_ids)
+        )  # id order = year order
+        pubs = self._fetch(in_range[:max_results])
         if include_bibtex:
             for p in pubs:
                 p["bibtex"] = self.fetch_bibtex_entry(p["dblp_key"])
@@ -896,6 +919,7 @@ class LocalDblp:
             "dblp_name": best,
             "similarity": cands[best],
             "total_publications": counts[best],
+            "matching_publications": len(in_range),  # within year_from/year_to
             "other_candidates": [(n, round(cands[n], 3), counts[n]) for n in ranked[1:10]],
         }
 
@@ -933,6 +957,14 @@ class LocalDblp:
         for key, venue in self._venue_rows(f"venue : ^{_q(' '.join(toks))}"):
             if norm(venue) == name.casefold():
                 counts["/".join(key.split("/")[:2])] += 1
+        # c) full journal name vs abbreviation ("Journal of Graph Theory" ~ "J. Graph Theory").
+        # Checked even after an exact match, because a journal's full name can also be
+        # the exact name of a small venue ('Artificial Intelligence' is a book's title,
+        # 'Theoretical Computer Science' a 1977 conference); get_venue_info takes the
+        # stream with the most records.
+        words = [t for t in toks if t not in STOPWORDS]
+        if len(words) >= 2:
+            counts.update(self._abbrev_candidates(words, norm))
         if counts:
             return counts
         # b) name equals a stream segment (e.g. 'jgt', 'nips')
@@ -943,25 +975,6 @@ class LocalDblp:
                 counts[f"{kind}/{seg}"] = n
         if counts:
             return counts
-        # c) full journal name vs abbreviation ("Journal of Graph Theory" ~ "J. Graph Theory")
-        words = [t for t in toks if t not in STOPWORDS]
-        qwords = [w for w in words if w not in _GENERIC_VENUE_WORDS] or words
-        if len(words) >= 2 and qwords:
-            qwords = sorted(qwords, key=len, reverse=True)[:3]
-            match = "venue : (" + " AND ".join(_q(w[:3]) + "*" for w in qwords) + ")"
-            vc: Counter = Counter()
-            for key, venue in self._venue_rows(match):
-                vc[(norm(venue), "/".join(key.split("/")[:2]))] += 1
-            best_score = 0.0
-            for (venue, stream), n in vc.items():
-                s = _abbrev_score(venue, words)
-                if s > best_score:
-                    best_score, counts = s, Counter({stream: n})
-                elif s == best_score and s > 0:
-                    counts[stream] += n
-            if best_score >= 0.99:
-                return counts
-            counts = Counter()
         # d) conference full name: proceedings titles
         for (key,) in self.conn.execute(
             "SELECT publ.key FROM publ_fts JOIN publ ON publ.id = publ_fts.rowid "
@@ -971,8 +984,62 @@ class LocalDblp:
             counts["/".join(key.split("/")[:2])] += 1
         return counts
 
+    def _abbrev_candidates(self, words: list[str], norm) -> Counter:
+        """Streams whose venue abbreviation fully matches the full name `words`
+        (non-stopword tokens), with their record counts; empty if none matches fully."""
+        # FTS prefixes of the distinctive words; if all words are generic ('Journal of
+        # the ACM'), the short ones: abbreviations keep acronyms ('ACM') but shorten
+        # long words ('J.'), so 'jou*' would miss
+        qwords = (
+            [w for w in words if w not in _GENERIC_VENUE_WORDS]
+            or [w for w in words if len(w) <= 4]
+            or words
+        )
+        qwords = sorted(qwords, key=len, reverse=True)[:3]
+        match = "venue : (" + " AND ".join(_q(w[:3]) + "*" for w in qwords) + ")"
+        vc: Counter = Counter()
+        for key, venue in self._venue_rows(match):
+            vc[(norm(venue), "/".join(key.split("/")[:2]))] += 1
+        best_score, counts = 0.0, Counter()
+        for (venue, stream), n in vc.items():
+            s = _abbrev_score(venue, words)
+            if s > best_score:
+                best_score, counts = s, Counter({stream: n})
+            elif s == best_score and s > 0:
+                counts[stream] += n
+        return counts if best_score >= 0.99 else Counter()
+
+    def _main_proceedings_title(self, stream: str) -> str:
+        """Title of the stream's main recent proceedings volume: the one with the most
+        papers among the volumes of its last three years.  The newest volume can be a
+        small co-located workshop volume (IJCAI's newest is 'Democracy and AI ... Held in
+        Conjunction with IJCAI 2025', 8 papers, next to the main volume's 1280)."""
+        lo, hi = stream + "/", _next_str(stream + "/")
+        latest = self.conn.execute(
+            f"SELECT max(year) FROM publ WHERE key > ? AND key < ? AND type = {T_PROC}",
+            (lo, hi),
+        ).fetchone()[0]
+        if latest is None:
+            return ""
+        row = self.conn.execute(
+            "SELECT p.title FROM publ p WHERE p.type = ? AND p.key = ("
+            "SELECT crossref FROM publ WHERE key > ? AND key < ? AND crossref IS NOT NULL "
+            "AND year >= ? GROUP BY crossref ORDER BY count(*) DESC, crossref DESC LIMIT 1)",
+            (T_PROC, lo, hi, latest - 2),
+        ).fetchone()
+        if row is None:  # no crossrefs: the newest volume
+            row = self.conn.execute(
+                f"SELECT title FROM publ WHERE key > ? AND key < ? AND type = {T_PROC} "
+                "ORDER BY year DESC LIMIT 1",
+                (lo, hi),
+            ).fetchone()
+        return plain_title(row[0]) if row else ""
+
     def get_venue_info(self, venue_name: str) -> dict[str, Any]:
         empty = {"venue": "", "acronym": "", "type": "", "url": ""}
+        toks = [t for t in _tokens(venue_name) if t not in STOPWORDS]
+        if len(toks) == 1 and toks[0] in _GENERIC_VENUE_WORDS:
+            return empty  # 'ACM', 'IEEE', 'Journal': a publisher or a word, not a venue
         counts = self._venue_candidates(venue_name)
         if not counts:
             return empty
@@ -992,12 +1059,7 @@ class LocalDblp:
             )
         ).most_common(1)
         short_name = short[0][0] if short else ""
-        latest_proc = self.conn.execute(
-            f"SELECT title FROM publ WHERE key > ? AND key < ? AND type = {T_PROC} "
-            "ORDER BY year DESC LIMIT 1",
-            (lo, _next_str(lo)),
-        ).fetchone()
-        proc_title = plain_title(latest_proc[0]) if latest_proc else ""
+        proc_title = self._main_proceedings_title(stream)
         full = short_name
         if kind == "conf" and proc_title:
             full = _proceedings_series_name(proc_title) or short_name
@@ -1062,11 +1124,23 @@ def _abbrev_score(venue: str, words: list[str]) -> float:
     return hit / len(vt) * (hit / max(len(words), 1))
 
 
+_ORDINAL_WORD = (
+    r"(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[- ])?"
+    r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|"
+    r"thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|"
+    r"thirtieth|fortieth|fiftieth|sixtieth|seventieth|eightieth|ninetieth)"
+)
+
+
 def _proceedings_series_name(title: str) -> str:
-    """'29th International Conference on X, CP 2023, ...' -> 'International Conference on X'."""
+    """'29th International Conference on X, CP 2023, ...' -> 'International Conference on X'
+    (also 'Proceedings of the Thirty-Fourth International Joint Conference on ...')."""
     first = max(title.split(",")[0].split(" - "), key=len)
     first = re.sub(
-        r"^(Proceedings of the\s+)?(\d{4}\s+)?(\d+(st|nd|rd|th)\s+)?", "", first, flags=re.I
+        rf"^(Proceedings of the\s+)?(\d{{4}}\s+)?((\d+(st|nd|rd|th)|{_ORDINAL_WORD})\s+)?",
+        "",
+        first,
+        flags=re.I,
     )
     first = re.sub(r"\s+\d{4}$", "", first)
     return first.strip().rstrip(".")

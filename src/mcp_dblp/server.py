@@ -9,6 +9,7 @@ Removing or renaming this function will break package imports and cause an error
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 from importlib import resources
@@ -94,9 +95,30 @@ def _argument_error(schema: dict | None, arguments: dict) -> str | None:
     return None
 
 
-# Longest tool answer in characters (about 15k tokens); longer lists are cut at a result
-# boundary, since clients such as Claude Code reject oversized tool output outright.
-MAX_OUTPUT_CHARS = 60_000
+# Longest tool answer in characters; longer lists are cut at a result boundary, since
+# clients such as Claude Code reject oversized tool output outright.  Result lists
+# tokenize densely (keys, names), so 60,000 characters already exceeded Claude Code's
+# 25,000-token limit in a test (2026-09-23).
+MAX_OUTPUT_CHARS = 30_000
+
+# Empty answers say what to try next
+NO_SEARCH_RESULTS = (
+    "Found 0 publications matching your query. All words must match: try fewer or other "
+    "words, check the spelling of names, note that a field prefix covers only the next word, "
+    "or use fuzzy_title_search if you know the title."
+)
+NO_TITLE_RESULTS = (
+    "Found 0 publications with similar titles. Try a lower similarity_threshold (e.g. 0.5), "
+    "fewer words, or search with the first author's surname and title words."
+)
+PARENS_ERROR = (
+    "Error: parentheses are not supported, so they cannot group 'or' alternatives. Write each "
+    "alternative in full, e.g. 'Szeider backdoor or Cook backdoor'."
+)
+NO_AUTHOR_HINT = (
+    "Try the full name as DBLP writes it (accents do not matter), a lower "
+    "similarity_threshold, or search with the surname and title words."
+)
 
 
 def _cap_output(result: list[types.TextContent]) -> list[types.TextContent]:
@@ -156,31 +178,59 @@ def create_server(backend) -> Server:
         _instructions_text = ""
 
     def _tools() -> list[types.Tool]:
-        """All DBLP tools with detailed descriptions."""
+        """All DBLP tools. The descriptions are the only guidance a client is sure to show
+        the model, so they explain usage, output and pitfalls, not just the arguments."""
+        year_from = {"type": "integer", "description": "Only publications from this year on."}
+        year_to = {"type": "integer", "description": "Only publications up to this year."}
+        venue_filter = {
+            "type": "string",
+            "description": "Case-insensitive substring of the venue as DBLP writes it: a "
+            "conference acronym ('AAAI') or a journal abbreviation ('J. ACM').",
+        }
+        include_bibtex = {
+            "type": "boolean",
+            "description": "Also show each result's BibTeX (default false). Not needed for "
+            "add_bibtex_entry.",
+        }
         return [
             types.Tool(
                 name="search",
                 description=(
-                    "Search DBLP for publications using a boolean query string.\n"
-                    "Arguments:\n"
-                    "  - query (string, required): A query string that may include boolean operators 'and' and 'or' (case-insensitive).\n"
-                    "    For example, 'Swin and Transformer'. Parentheses are not supported.\n"
-                    "  - max_results (integer, optional): Maximum number of publications to return. Default is 10.\n"
-                    "  - year_from (integer, optional): Lower bound for publication year.\n"
-                    "  - year_to (integer, optional): Upper bound for publication year.\n"
-                    "  - venue_filter (string, optional): Case-insensitive substring filter for publication venues (e.g., 'iclr').\n"
-                    "  - include_bibtex (boolean, optional): Whether to include BibTeX entries in the results. Default is false.\n"
-                    "Returns a list of publication objects including title, authors, venue, year, type, doi, ee, and url."
+                    "Search the publications in DBLP (a local copy of the monthly DBLP dump; papers "
+                    "added to DBLP after it are missing). All query words must occur in the title, "
+                    "the author names or the venue (venues as DBLP writes them: 'Nat.' for Nature, "
+                    "'J. ACM'; leave venue words out if unsure); case and accents do not matter.\n"
+                    "Syntax: 'or' between alternatives (no parentheses); \"quoted phrase\" (the words "
+                    "adjacent and in this order, anywhere in the field); the field "
+                    "prefixes author:, title:, venue: and year: apply to the next word or quoted "
+                    "phrase only; a 4-digit year restricts the results to that year; a trailing * "
+                    "matches word beginnings. Example: 'author:Vaswani title:attention 2017'.\n"
+                    "For a citation, search for the first author's surname plus one or two "
+                    "distinctive title words and the year. A surname with a year alone can return "
+                    "only papers of a namesake ('Vaswani 2017' lists papers of Namrata Vaswani).\n"
+                    "Each result shows title, authors, venue (year), the DBLP key to pass to "
+                    "add_bibtex_entry, and a 'Matched:' line that says where each query word was "
+                    "found: 'szeider = author 2 of 3' (family name of the second of three authors), "
+                    "'given name of author 1 of 2' (only a first name: usually another person), "
+                    "'title', 'venue', 'title word only' (a name-like word found only in the title), "
+                    "'~ prefix of \"X\"' (only the beginning of a longer word). Results marked "
+                    "'prefix match only' come last and are usually other papers. Accept a result "
+                    "only if the cited authors match as authors and title and year fit. The same "
+                    "paper can appear as arXiv preprint (venue CoRR), conference and journal version."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string"},
-                        "max_results": {"type": "integer"},
-                        "year_from": {"type": "integer"},
-                        "year_to": {"type": "integer"},
-                        "venue_filter": {"type": "string"},
-                        "include_bibtex": {"type": "boolean"},
+                        "query": {"type": "string", "description": "Search words, syntax above."},
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results (default 10). Very long "
+                            "answers are cut off; narrow the query instead.",
+                        },
+                        "year_from": year_from,
+                        "year_to": year_to,
+                        "venue_filter": venue_filter,
+                        "include_bibtex": include_bibtex,
                     },
                     "required": ["query"],
                 },
@@ -188,27 +238,32 @@ def create_server(backend) -> Server:
             types.Tool(
                 name="fuzzy_title_search",
                 description=(
-                    "Search DBLP for publications with fuzzy title matching.\n"
-                    "Arguments:\n"
-                    "  - title (string, required): Full or partial title of the publication (case-insensitive).\n"
-                    "  - similarity_threshold (number, required): A float between 0 and 1 where 1.0 means an exact match.\n"
-                    "  - max_results (integer, optional): Maximum number of publications to return. Default is 10.\n"
-                    "  - year_from (integer, optional): Lower bound for publication year.\n"
-                    "  - year_to (integer, optional): Upper bound for publication year.\n"
-                    "  - venue_filter (string, optional): Case-insensitive substring filter for publication venues.\n"
-                    "  - include_bibtex (boolean, optional): Whether to include BibTeX entries in the results. Default is false.\n"
-                    "Returns a list of publication objects sorted by title similarity score."
+                    "Find publications by title: also when the title is misspelled, abbreviated or "
+                    "only its beginning is known. Results are ranked by title similarity (1.0 = "
+                    "identical) and show [Similarity], authors, venue (year) and the DBLP key. The "
+                    "same title often appears several times (arXiv preprint in CoRR, conference and "
+                    "journal version, reprints): choose by venue and year."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string"},
-                        "similarity_threshold": {"type": "number"},
-                        "max_results": {"type": "integer"},
-                        "year_from": {"type": "integer"},
-                        "year_to": {"type": "integer"},
-                        "venue_filter": {"type": "string"},
-                        "include_bibtex": {"type": "boolean"},
+                        "title": {
+                            "type": "string",
+                            "description": "The title or its beginning; case does not matter.",
+                        },
+                        "similarity_threshold": {
+                            "type": "number",
+                            "description": "Minimum similarity from 0 to 1: 0.7 is a good "
+                            "default, 0.9 for a nearly exact title, 0.5 for a garbled one.",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results (default 10).",
+                        },
+                        "year_from": year_from,
+                        "year_to": year_to,
+                        "venue_filter": venue_filter,
+                        "include_bibtex": include_bibtex,
                     },
                     "required": ["title", "similarity_threshold"],
                 },
@@ -216,25 +271,34 @@ def create_server(backend) -> Server:
             types.Tool(
                 name="get_author_publications",
                 description=(
-                    "Retrieve publication details for a specific author with fuzzy matching.\n"
-                    "Arguments:\n"
-                    "  - author_name (string, required): Full or partial author name (case-insensitive).\n"
-                    "  - similarity_threshold (number, required): A float between 0 and 1 where 1.0 means an exact match.\n"
-                    "  - max_results (integer, optional): Maximum number of publications to return. Default is 20.\n"
-                    "  - include_bibtex (boolean, optional): Whether to include BibTeX entries in the results. Default is false.\n"
-                    "  - year_from (integer, optional): Only publications from this year on.\n"
-                    "  - year_to (integer, optional): Only publications up to this year.\n"
-                    "Returns a dictionary with keys: name, publication_count, publications, and stats (which includes top venues, years, and types)."
+                    "List one person's publications in DBLP, newest first. DBLP tells people with "
+                    "the same name apart by a 4-digit number ('Wei Wang 0010'). The answer starts "
+                    "with the DBLP person listed and the other DBLP persons with a matching name; "
+                    "pass such a name with its number as author_name to list that person. The name "
+                    "without a number collects papers DBLP has not assigned to a numbered person, "
+                    "so for a common name it mixes several people. To find one paper by an author "
+                    "with a common name, search with title words is usually faster."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "author_name": {"type": "string"},
-                        "similarity_threshold": {"type": "number"},
-                        "max_results": {"type": "integer"},
-                        "include_bibtex": {"type": "boolean"},
-                        "year_from": {"type": "integer"},
-                        "year_to": {"type": "integer"},
+                        "author_name": {
+                            "type": "string",
+                            "description": "Full name ('Stefan Szeider'), optionally with DBLP's "
+                            "number ('Wei Wang 0010'). Case, accents and small typos do not matter.",
+                        },
+                        "similarity_threshold": {
+                            "type": "number",
+                            "description": "Minimum name similarity from 0 to 1; 0.8 is a good "
+                            "default.",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of publications (default 20).",
+                        },
+                        "include_bibtex": include_bibtex,
+                        "year_from": year_from,
+                        "year_to": year_to,
                     },
                     "required": ["author_name", "similarity_threshold"],
                 },
@@ -242,62 +306,71 @@ def create_server(backend) -> Server:
             types.Tool(
                 name="get_venue_info",
                 description=(
-                    "Retrieve information about a publication venue from DBLP.\n"
-                    "Arguments:\n"
-                    "  - venue_name (string, required): Venue name or abbreviation (e.g., 'ICLR', 'NeurIPS', or full name).\n"
-                    "Returns a dictionary with fields:\n"
-                    "  - venue: Full venue title\n"
-                    "  - acronym: Venue acronym/abbreviation (if available)\n"
-                    "  - type: Venue type (e.g., 'Conference or Workshop', 'Journal', 'Repository')\n"
-                    "  - url: Canonical DBLP URL for the venue\n"
-                    "Note: Publisher, ISSN, and other metadata are not available through this endpoint."
+                    "Look up a journal or conference series in DBLP: its full name, acronym, type, "
+                    "DBLP page, number of publications and years. Accepts a conference acronym "
+                    "('IJCAI', 'NeurIPS'), DBLP's journal abbreviation ('J. ACM', 'Theor. Comput. "
+                    "Sci.') or a journal's full name ('Journal of the ACM'). Useful to choose a "
+                    "venue_filter or to write a venue name out in full."
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {"venue_name": {"type": "string"}},
+                    "properties": {
+                        "venue_name": {
+                            "type": "string",
+                            "description": "Acronym, DBLP abbreviation or full name.",
+                        }
+                    },
                     "required": ["venue_name"],
                 },
             ),
             types.Tool(
                 name="set_dblp_mirror",
                 description=(
-                    "Choose the dblp.org mirror for the web fallback. With the local DBLP index "
-                    "(the default), searches never contact dblp.org, so this is rarely needed: it only "
-                    "affects BibTeX keys missing from the local index, and the web backend "
-                    "(MCP_DBLP_INDEX=http).\n"
-                    "Available mirrors:\n"
-                    "  - dblp.org (default)\n"
-                    "  - dblp.uni-trier.de\n"
-                    "  - dblp.dagstuhl.de\n"
-                    "Other hosts are rejected.\n"
-                    "Arguments:\n"
-                    "  - host (string, required): Mirror hostname (e.g., 'dblp.uni-trier.de')."
+                    "Rarely needed. Chooses the dblp.org host for the web fallback, which is tried "
+                    "only for BibTeX keys missing from the local copy of DBLP (and for all requests "
+                    "if the server runs with MCP_DBLP_INDEX=http); dblp.org currently blocks such "
+                    "automated requests. Searches never contact dblp.org.\n"
+                    "Available mirrors: dblp.org (default), dblp.uni-trier.de, dblp.dagstuhl.de. "
+                    "Other hosts are rejected."
                 ),
                 inputSchema={
                     "type": "object",
-                    "properties": {"host": {"type": "string"}},
+                    "properties": {
+                        "host": {
+                            "type": "string",
+                            "description": "Mirror hostname, e.g. 'dblp.uni-trier.de'.",
+                        }
+                    },
                     "required": ["host"],
                 },
             ),
             types.Tool(
                 name="add_bibtex_entry",
                 description=(
-                    "Add a BibTeX entry to the collection for later export. Call this once for each paper you want to export.\n"
-                    "Arguments:\n"
-                    "  - dblp_key (string, required): The DBLP key from search results (e.g., 'conf/nips/VaswaniSPUJGKP17').\n"
-                    "  - citation_key (string, required): The citation key to use in the .bib file (e.g., 'Vaswani2017').\n"
-                    "Workflow:\n"
-                    "  1. Fetches BibTeX directly from DBLP using the provided key\n"
-                    "  2. Replaces the citation key with your custom key\n"
-                    "  3. Adds to collection (duplicate citation_key will be overwritten)\n"
-                    "  4. Returns count of entries currently in collection\n"
-                    "After adding all entries, call export_bibtex to save them to a .bib file."
+                    "Add one publication to the session's collection of BibTeX entries, under your "
+                    "citation key. The entry is DBLP's own BibTeX for the record (the format of the "
+                    "dblp.org .bib export); only its citation key is replaced. Returns the number "
+                    "of entries in the collection, or an error: 'not found in the local index' "
+                    "means that the key is mistyped or that the record is newer than the local "
+                    "copy of DBLP. Reusing a citation key replaces the earlier entry ('replaced "
+                    "existing entry'). Calls can run in parallel; call export_bibtex at the end."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "dblp_key": {"type": "string"},
-                        "citation_key": {"type": "string"},
+                        "dblp_key": {
+                            "type": "string",
+                            "description": "The DBLP key from a result, e.g. "
+                            "'conf/nips/VaswaniSPUJGKP17'. Also accepted: "
+                            "'DBLP:conf/nips/VaswaniSPUJGKP17' and "
+                            "'https://dblp.org/rec/conf/nips/VaswaniSPUJGKP17.bib' (the biburl "
+                            "field of a DBLP BibTeX entry).",
+                        },
+                        "citation_key": {
+                            "type": "string",
+                            "description": "Key for the .bib file, e.g. 'Vaswani2017'; unique "
+                            "within the collection.",
+                        },
                     },
                     "required": ["dblp_key", "citation_key"],
                 },
@@ -305,19 +378,16 @@ def create_server(backend) -> Server:
             types.Tool(
                 name="export_bibtex",
                 description=(
-                    "Export all collected BibTeX entries to a .bib file. Call this after adding all entries with add_bibtex_entry.\n"
-                    "Workflow:\n"
-                    "  1. Saves all collected entries to a .bib file at the specified path\n"
-                    "  2. Clears the collection for next export\n"
-                    "  3. Returns the full path to the exported file\n"
-                    "Returns error if no entries have been added yet."
+                    "Write all collected BibTeX entries to a .bib file and empty the collection. "
+                    "Returns the number of entries and the file path. Entries for papers that are "
+                    "not in DBLP have to be added to the file afterwards."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'). The .bib extension is added automatically if missing. Parent directories are created if needed.",
+                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'); a leading ~ is expanded, relative paths are rejected. The .bib extension is added automatically if missing. Parent directories are created if needed.",
                         },
                     },
                     "required": ["path"],
@@ -340,10 +410,27 @@ def create_server(backend) -> Server:
             result.append(
                 types.TextContent(
                     type="text",
-                    text=f"\n---\n## DBLP Usage Instructions\n\n{_instructions_text}",
+                    text=f"\n---\n## DBLP Usage Instructions\n\n{_coverage_note()}{_instructions_text}",
                 )
             )
         return result
+
+    def _release_note() -> str:
+        """A sentence for empty answers: how current the local copy is."""
+        release = getattr(backend, "release", "")
+        if not release:
+            return ""
+        return f" The local copy of DBLP is the dump of {release}; newer papers are missing."
+
+    def _coverage_note() -> str:
+        """Which DBLP release the answers come from ('' for the web backend)."""
+        release = getattr(backend, "release", "")
+        if not release:
+            return ""
+        return (
+            f"**This server answers from the DBLP dump of {release}.** Papers that DBLP added "
+            "after that date are not found.\n\n"
+        )
 
     async def handle_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
         """Handle tool calls from clients.
@@ -359,6 +446,7 @@ def create_server(backend) -> Server:
         if problem:
             logger.warning(f"Tool call {name}: {problem}")
             return _tool_result([types.TextContent(type="text", text=problem)], error=True)
+        logger.info(f"Tool call: {name} with arguments {arguments}")  # once, not per retry
         wait = _first_start_wait()
         deadline = time.monotonic() + wait
         while True:
@@ -386,9 +474,22 @@ def create_server(backend) -> Server:
     def _dispatch_tool(name: str, arguments: dict) -> list[types.TextContent]:
         """Dispatch a tool call and return the result."""
         try:
-            logger.info(f"Tool call: {name} with arguments {arguments}")
             match name:
                 case "search":
+                    query = arguments.get("query") or ""
+                    if not query.strip():
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="Error: the query is empty; give words to search for.",
+                            )
+                        ]
+                    # without grouping, '(A or B) C' would silently mean 'A' or 'B C'
+                    unquoted = re.sub(r'"[^"]*"', "", query)
+                    if ("(" in unquoted or ")" in unquoted) and re.search(
+                        r"\sor\s", unquoted, re.I
+                    ):
+                        return [types.TextContent(type="text", text=PARENS_ERROR)]
                     include_bibtex = arguments.get("include_bibtex", False)
                     result = backend.search(
                         query=arguments.get("query"),
@@ -398,6 +499,10 @@ def create_server(backend) -> Server:
                         venue_filter=arguments.get("venue_filter"),
                         include_bibtex=include_bibtex,
                     )
+                    if not result:
+                        return [
+                            types.TextContent(type="text", text=NO_SEARCH_RESULTS + _release_note())
+                        ]
                     if include_bibtex:
                         return [
                             types.TextContent(
@@ -423,6 +528,10 @@ def create_server(backend) -> Server:
                         venue_filter=arguments.get("venue_filter"),
                         include_bibtex=include_bibtex,
                     )
+                    if not result:
+                        return [
+                            types.TextContent(type="text", text=NO_TITLE_RESULTS + _release_note())
+                        ]
                     if include_bibtex:
                         return [
                             types.TextContent(
@@ -449,23 +558,43 @@ def create_server(backend) -> Server:
                     )
                     pub_count = result.get("publication_count", 0)
                     publications = result.get("publications", [])
+                    header = format_author_header(result)
+                    if not publications and not result.get("total_publications"):
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"No DBLP person matches '{arguments['author_name']}'. "
+                                + NO_AUTHOR_HINT,
+                            )
+                        ]
 
                     if include_bibtex:
                         return [
                             types.TextContent(
                                 type="text",
-                                text=f"Found {pub_count} publications for author {arguments['author_name']}:\n\n{format_results_with_bibtex(publications)}",
+                                text=f"Found {pub_count} publications for author {arguments['author_name']}:\n{header}\n{format_results_with_bibtex(publications)}",
                             )
                         ]
                     else:
                         return [
                             types.TextContent(
                                 type="text",
-                                text=f"Found {pub_count} publications for author {arguments['author_name']}:\n\n{format_results(publications)}",
+                                text=f"Found {pub_count} publications for author {arguments['author_name']}:\n{header}\n{format_results(publications)}",
                             )
                         ]
                 case "get_venue_info":
                     result = backend.get_venue_info(venue_name=arguments.get("venue_name"))
+                    if not result.get("url"):
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"No DBLP venue found for '{arguments['venue_name']}'. "
+                                "DBLP names journals by their abbreviation (e.g. 'J. ACM', "
+                                "'Theor. Comput. Sci.') and conferences by their acronym "
+                                "(e.g. 'IJCAI'); a journal's full name works when it expands "
+                                "such an abbreviation.",
+                            )
+                        ]
                     return [
                         types.TextContent(
                             type="text",
@@ -607,6 +736,38 @@ async def serve() -> None:
                 ),
             ),
         )
+
+
+def format_author_header(result: dict) -> str:
+    """Which dblp person get_author_publications chose, and the other persons with a
+    matching name ('' for the web backend, which does not report them)."""
+    name = result.get("dblp_name")
+    if not name:
+        return ""
+    lines = [f"DBLP person: {name} ({result.get('total_publications', 0)} publications in total)"]
+    shown = len(result.get("publications") or [])
+    matching = result.get("matching_publications") or 0
+    if shown < matching:
+        lines.append(
+            f"Showing the newest {shown} of {matching}; raise max_results or narrow "
+            "year_from/year_to to see more."
+        )
+    others = result.get("other_candidates") or []
+    if others:
+        listed = ", ".join(f"{n} ({count})" for n, _, count in others)
+        lines.append(
+            f"Other DBLP persons with a matching name: {listed}. Pass one of these names "
+            "as author_name to list that person."
+        )
+        if not re.search(r" \d{4}$", name) and any(
+            re.sub(r" \d{4}$", "", n) == name for n, _, _ in others
+        ):
+            lines.append(
+                "DBLP keeps papers it has not assigned to one of the numbered persons under "
+                "the name without a number, so this list can mix several people. For a "
+                "common name, a search with title words is usually faster."
+            )
+    return "\n".join(lines) + "\n"
 
 
 def format_results(results):

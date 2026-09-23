@@ -84,6 +84,34 @@ async def test_export_expands_home(mode, session_backend, tmp_path, monkeypatch)
         assert (tmp_path / "refs.bib").exists()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+async def test_parallel_adds(mode, session_backend, tmp_path):
+    # instructions_prompt.md allows batching add_bibtex_entry calls
+    import asyncio
+
+    keys = [
+        "journals/tcs/GodelS20",
+        "conf/sat/KirchwegerS21",
+        "conf/sat/ManyaG21",
+        "journals/ipl/PetrovaW21",
+        "journals/ipl/SmirnovB21",
+    ]
+    async with Client(create_server(session_backend), mode=mode) as c:
+        rs = await asyncio.gather(
+            *(
+                c.call_tool("add_bibtex_entry", {"dblp_key": k, "citation_key": f"k{i}"})
+                for i, k in enumerate(keys)
+            )
+        )
+        assert all("Successfully added" in _text(r) for r in rs)
+        out = tmp_path / "refs.bib"
+        r = await c.call_tool("export_bibtex", {"path": str(out)})
+    assert "Exported 5 references" in _text(r)
+    bib = out.read_text(encoding="utf-8")
+    assert all(f"{{k{i}," in bib for i in range(5))
+
+
 def test_package_import_does_not_configure_server_logging():
     import subprocess
     import sys
@@ -117,9 +145,11 @@ def _install_copy(mini_index, index_dir):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", MODES)
-async def test_first_start_call_waits_for_index(mode, mini_index, tmp_path, monkeypatch):
+async def test_first_start_call_waits_for_index(mode, mini_index, tmp_path, monkeypatch, caplog):
+    import logging
     import time
 
+    caplog.set_level(logging.INFO, logger="mcp_dblp")
     monkeypatch.setenv("MCP_DBLP_FIRST_START_WAIT", "10")
     idx = str(tmp_path / "index")
 
@@ -137,6 +167,8 @@ async def test_first_start_call_waits_for_index(mode, mini_index, tmp_path, monk
     assert "journals/tcs/GodelS20" in _text(r)  # answered, not the progress message
     assert "DBLP Usage Instructions" in _text(r)
     assert 0.8 < dt < 6
+    # the call is retried while it waits, but logged once
+    assert sum("Tool call: search" in m for m in caplog.messages) == 1
 
 
 @pytest.mark.asyncio

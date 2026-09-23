@@ -137,10 +137,14 @@ class LocalBackend:
         logger.info(f"{key} not in local index; trying the dblp web API")
         bibtex = self.http.bibtex_for_citation(key, citation_key)
         if _is_error(bibtex):
+            reason = bibtex.strip().removeprefix("% Error").lstrip(": ")
+            if "not BibTeX" in reason:  # dblp.org's bot check page
+                reason = "dblp.org answered with a web page, it blocks automated requests"
             return (
                 f"% Error: DBLP key '{key}' not found in the local index "
-                f"(release {self.release or 'unknown'}); web fallback failed: "
-                f"{bibtex.strip().removeprefix('% Error').lstrip(': ')}"
+                f"(release {self.release or 'unknown'}). Check the key against the search "
+                "results; if it is correct, the record is newer than the local index and "
+                f"cannot be added. (The web fallback failed too: {reason[:200]})"
             )
         return bibtex
 

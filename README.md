@@ -147,11 +147,11 @@ Usage instructions are delivered to the model with the first answer of each sess
 
 ### search
 
-Search DBLP for publications using a boolean query string.
+Search DBLP for publications. All query words must occur in the title, the author names or the venue (case and accents do not matter). Each result shows its DBLP key and a `Matched:` line that says where each query word was found, for example `szeider = author 2 of 3`.
 
 **Parameters:**
 
-- `query` (string, required): A query string that may include boolean operators 'and' and 'or' (case-insensitive)
+- `query` (string, required): The search words. `or` separates alternatives (no parentheses), `"quoted phrases"` match adjacent words, the field prefixes `author:`, `title:`, `venue:` and `year:` apply to the next word or phrase, and a 4-digit year restricts the results to that year. Example: `author:Vaswani title:attention 2017`
 - `max_results` (integer, optional): Maximum number of publications to return. Default is 10
 - `year_from` (integer, optional): Lower bound for publication year
 - `year_to` (integer, optional): Upper bound for publication year
@@ -160,7 +160,7 @@ Search DBLP for publications using a boolean query string.
 
 ### fuzzy_title_search
 
-Search DBLP for publications with fuzzy title matching.
+Find publications by title, also when the title is misspelled or only its beginning is known. Results are ranked by title similarity.
 
 **Parameters:**
 
@@ -174,11 +174,11 @@ Search DBLP for publications with fuzzy title matching.
 
 ### get_author_publications
 
-List an author's publications, newest first. The name is matched fuzzily.
+List an author's publications, newest first. The name is matched fuzzily. DBLP tells namesakes apart by a number ("Wei Wang 0010"); the answer names the DBLP person listed and the other persons with a matching name.
 
 **Parameters:**
 
-- `author_name` (string, required): Full or partial author name (case-insensitive)
+- `author_name` (string, required): Full author name, optionally with DBLP's number (case and accents do not matter)
 - `similarity_threshold` (number, required): A float between 0 and 1 where 1.0 means an exact match
 - `max_results` (integer, optional): Maximum number of publications to return. Default is 20
 - `include_bibtex` (boolean, optional): Whether to include BibTeX entries in the results. Default is false
@@ -191,7 +191,7 @@ Look up a venue: its name, acronym, type (conference or journal), DBLP page, num
 
 **Parameters:**
 
-- `venue_name` (string, required): Venue name or abbreviation (e.g., 'ICLR' or full name)
+- `venue_name` (string, required): A conference acronym ('IJCAI'), DBLP's journal abbreviation ('J. ACM') or a journal's full name ('Journal of the ACM')
 
 ### add_bibtex_entry
 
@@ -199,7 +199,7 @@ Add a BibTeX entry to the collection for later export.
 
 **Parameters:**
 
-- `dblp_key` (string, required): The DBLP key from search results (e.g., "conf/nips/VaswaniSPUJGKP17")
+- `dblp_key` (string, required): The DBLP key from search results (e.g., "conf/nips/VaswaniSPUJGKP17"); `DBLP:KEY` and the `biburl` of a DBLP entry (`https://dblp.org/rec/KEY.bib`) work too
 - `citation_key` (string, required): The citation key to use in the .bib file (e.g., "Vaswani2017")
 
 **Behavior:**
