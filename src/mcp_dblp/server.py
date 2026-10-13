@@ -6,6 +6,7 @@ Removing or renaming this function will break package imports and cause an error
   ImportError: cannot import name 'main' from 'mcp_dblp.server'
 """
 
+import argparse
 import asyncio
 import logging
 import os
@@ -878,6 +879,24 @@ def format_dict(data):
 
 
 def main() -> int:
+    # only -h/--help is handled; other arguments are ignored as before
+    argparse.ArgumentParser(
+        prog="mcp-dblp",
+        description=(
+            "MCP server for the dblp computer science bibliography (stdio transport), "
+            "started by an MCP client.\nManage the local index with mcp-dblp-index."
+        ),
+        epilog=(
+            "environment variables:\n"
+            "  MCP_DBLP_HOME              directory for the index and downloads "
+            "(default ~/.mcp-dblp)\n"
+            "  MCP_DBLP_INDEX             path of a specific index file; 'http' uses the "
+            "dblp.org web API\n"
+            "  MCP_DBLP_FIRST_START_WAIT  seconds a tool call waits for the first-start "
+            "download (default 40)"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    ).parse_known_args()
     logger.info(f"Starting MCP-DBLP server with version: {version_str}")
     try:
         asyncio.run(serve())

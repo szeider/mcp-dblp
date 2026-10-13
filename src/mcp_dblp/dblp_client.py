@@ -55,6 +55,26 @@ def set_dblp_base_url(host: str) -> str:
     return DBLP_BASE_URL
 
 
+class WebPageError(RuntimeError):
+    """dblp.org answered with a web page (usually its bot check) instead of JSON."""
+
+
+def _json(response: requests.Response) -> Any:
+    """The JSON body of a dblp API response; WebPageError for anything else."""
+    ctype = response.headers.get("Content-Type", "")
+    if response.status_code == 202 or "json" not in ctype.lower():
+        detail = f"HTTP {response.status_code}, {ctype or 'no content type'}"
+        if response.status_code == 202 or "not a bot" in response.text:
+            # the HTML bot-check page, served with status 202 or 200
+            what = "a bot-check page"
+        else:
+            what = "a web page"
+        raise WebPageError(
+            f"DBLP returned {what} instead of JSON ({detail}); use the local index backend"
+        )
+    return response.json()
+
+
 def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, Any]]:
     """Helper function to fetch publications for a single query string."""
     results = []
@@ -63,7 +83,7 @@ def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, A
         params = {"q": single_query, "format": "json", "h": max_results}
         response = requests.get(url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        data = response.json()
+        data = _json(response)
         hits = data.get("result", {}).get("hits", {})
         total = int(hits.get("@total", "0"))
         logger.info(f"Found {total} results for query: {single_query}")
@@ -127,6 +147,8 @@ def _fetch_publications(single_query: str, max_results: int) -> list[dict[str, A
                 "error": f"Timeout after {REQUEST_TIMEOUT} seconds",
             }
         )
+    except WebPageError:
+        raise
     except Exception as e:
         logger.error(f"Error searching DBLP: {e}")
         # Return error result instead of mock data
@@ -553,7 +575,7 @@ def get_venue_info(venue_name: str) -> dict[str, Any]:
         params = {"q": venue_name, "format": "json", "h": 1}
         response = requests.get(url, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        data = response.json()
+        data = _json(response)
 
         hits = data.get("result", {}).get("hits", {})
         total = int(hits.get("@total", "0"))
@@ -578,6 +600,8 @@ def get_venue_info(venue_name: str) -> dict[str, Any]:
                 "type": "",
                 "url": "",
             }
+    except WebPageError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching venue info for {venue_name}: {str(e)}")
         return {

@@ -166,18 +166,61 @@ def test_underline_markup_dropped():
 
 
 class _Resp:
-    def __init__(self, text, status=200):
+    def __init__(self, text, status=200, ctype="text/html; charset=utf-8"):
         self.text, self.status_code = text, status
+        self.headers = {"Content-Type": ctype}
 
     def raise_for_status(self):
         pass
 
+    def json(self):
+        import json
+
+        return json.loads(self.text)
+
+
+BOT_PAGE = "<!doctype html><html><head><title>Making sure you're not a bot!</title>"
+
 
 def test_fetch_bibtex_entry_rejects_html(monkeypatch):
-    page = "<!doctype html><html><head><title>Making sure you're not a bot!</title>"
-    monkeypatch.setattr(dblp_client.requests, "get", lambda *a, **k: _Resp(page))
+    monkeypatch.setattr(dblp_client.requests, "get", lambda *a, **k: _Resp(BOT_PAGE))
     out = dblp_client.fetch_bibtex_entry("conf/cp/KirchwegerS21")
     assert out.startswith("% Error") and "not BibTeX" in out
+
+
+# ------------------------------------------------ web search and venue: a bot page is not JSON
+
+
+@pytest.mark.parametrize("status", [200, 202])
+def test_search_and_venue_reject_html(status, monkeypatch):
+    monkeypatch.setattr(dblp_client.requests, "get", lambda *a, **k: _Resp(BOT_PAGE, status))
+    with pytest.raises(dblp_client.WebPageError, match="bot-check page instead of JSON"):
+        dblp_client.search(query="Teso Kersting 2019")
+    with pytest.raises(dblp_client.WebPageError, match="bot-check page instead of JSON"):
+        dblp_client.get_venue_info(venue_name="IJCAI")
+
+
+def test_other_html_page_is_not_called_bot_check(monkeypatch):
+    page = "<!doctype html><html><head><title>Maintenance</title>"
+    monkeypatch.setattr(dblp_client.requests, "get", lambda *a, **k: _Resp(page))
+    with pytest.raises(dblp_client.WebPageError, match="a web page instead of JSON"):
+        dblp_client.get_venue_info(venue_name="IJCAI")
+
+
+@pytest.mark.asyncio
+async def test_http_bot_page_is_flagged(monkeypatch):
+    from mcp.client import Client
+
+    from mcp_dblp.server import create_server
+
+    monkeypatch.setattr(dblp_client.requests, "get", lambda *a, **k: _Resp(BOT_PAGE, 202))
+    async with Client(create_server(backend_mod.HttpBackend())) as c:
+        for tool, args in [
+            ("search", {"query": "Teso Kersting 2019"}),
+            ("get_venue_info", {"venue_name": "IJCAI"}),
+        ]:
+            r = await c.call_tool(tool, args)
+            assert r.is_error and "bot-check page instead of JSON" in r.content[0].text
 
 
 # ------------------------------------------------ server: null arguments, error flags, log
