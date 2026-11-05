@@ -169,6 +169,8 @@ def create_server(backend) -> Server:
 
     # First-call instruction delivery
     instructions_delivered = False
+    seen_release = ""  # the dump the caller was last told about
+    seen_update = ""  # the update state (backend.update_note) the caller was last told about
     try:
         _instructions_text = (
             resources.files("mcp_dblp")
@@ -420,12 +422,43 @@ def create_server(backend) -> Server:
             )
         return result
 
+    def _update_state() -> tuple[str, str]:
+        """(state, sentence) about a newer dump: being installed, failed, or turned off."""
+        return getattr(backend, "update_note", lambda: ("", ""))()
+
     def _release_note() -> str:
         """A sentence for empty answers: how current the local copy is."""
+        nonlocal seen_update
         release = getattr(backend, "release", "")
         if not release:
             return ""
-        return f" The local copy of DBLP is the dump of {release}; newer papers are missing."
+        note = f" The local copy of DBLP is the dump of {release}; newer papers are missing."
+        kind, text = _update_state()
+        if kind:
+            seen_update = kind
+            note += f" {text}"
+        return note
+
+    def _append_news(result: list[types.TextContent]) -> list[types.TextContent]:
+        """Append what changed since the last answer, each change once: the local copy
+        switched to another dump, or the automatic update started, failed or is off."""
+        nonlocal seen_release, seen_update
+        news = []
+        release = getattr(backend, "release", "")
+        if release:
+            if seen_release and release != seen_release:
+                news.append(
+                    "The local copy of DBLP was updated during this session: answers now "
+                    f"come from the dump of {release}."
+                )
+            seen_release = release
+        kind, text = _update_state()
+        if kind and kind != seen_update:
+            news.append(text)
+        seen_update = kind
+        if news:
+            result.append(types.TextContent(type="text", text="\n---\nNote: " + " ".join(news)))
+        return result
 
     def _coverage_note() -> str:
         """Which DBLP release the answers come from ('' for the web backend)."""
@@ -452,6 +485,8 @@ def create_server(backend) -> Server:
             logger.warning(f"Tool call {name}: {problem}")
             return _tool_result([types.TextContent(type="text", text=problem)], error=True)
         logger.info(f"Tool call: {name} with arguments {arguments}")  # once, not per retry
+        # the server is in use: a newer index found at start may be downloaded now
+        getattr(backend, "tool_called", lambda: None)()
         wait = _first_start_wait()
         deadline = time.monotonic() + wait
         while True:
@@ -474,7 +509,7 @@ def create_server(backend) -> Server:
                 logger.warning(f"Tool call {name}: {message}")
                 return _tool_result([types.TextContent(type="text", text=message)])
         failed = bool(result) and result[0].text.startswith(_ERROR_PREFIXES)
-        return _tool_result(_maybe_append_instructions(result), error=failed)
+        return _tool_result(_append_news(_maybe_append_instructions(result)), error=failed)
 
     def _dispatch_tool(name: str, arguments: dict) -> list[types.TextContent]:
         """Dispatch a tool call and return the result."""
@@ -726,8 +761,9 @@ def create_server(backend) -> Server:
 async def serve() -> None:
     """Main server function to handle MCP requests"""
     # Without an index this starts the download in a background thread; tool calls then
-    # return its progress (IndexUnavailable) instead of blocking.
-    server = create_server(select_backend(auto_fetch=True))
+    # return its progress (IndexUnavailable) instead of blocking.  With an index, a
+    # background thread checks for a newer release (installed once a tool is called).
+    server = create_server(select_backend(auto_fetch=True, auto_update=True))
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -893,7 +929,9 @@ def main() -> int:
             "  MCP_DBLP_INDEX             path of a specific index file; 'http' uses the "
             "dblp.org web API\n"
             "  MCP_DBLP_FIRST_START_WAIT  seconds a tool call waits for the first-start "
-            "download (default 40)"
+            "download (default 40)\n"
+            "  MCP_DBLP_AUTO_UPDATE       0 turns off the automatic monthly update of the "
+            "index (a newer one is then only reported)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     ).parse_known_args()

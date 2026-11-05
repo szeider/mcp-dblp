@@ -21,7 +21,7 @@ Since version 2.0, MCP-DBLP works from a local copy of DBLP instead of the dblp.
 - Author-aware ranking: each search result names the query words that matched an author, the title, or the venue, and marks prefix-only matches
 - BibTeX in DBLP's own format, rendered from DBLP's data; it matches the `.bib` export on dblp.org except for the time of day in the `timestamp` field, and titles also brace words with inner capitals (`{CaDiCaL}`, `{DRUP}-based`) so that bibliography styles do not lowercase them
 - Export of the collected entries to a `.bib` file, written by the server
-- A new local index every month, installed with `mcp-dblp-index update`
+- A new local index every month, installed by the server in the background
 
 ## Available tools
 
@@ -44,6 +44,7 @@ Provide feedback to the author via this [form](https://form.jotform.com/szeider/
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - About 5.5 GB of free disk space on first start (1.3 GB download plus 4.2 GB index), 4.2 GB afterwards
+- For the monthly update, about 5.7 GB of free space, or 1.5 GB with a short pause (see [The local DBLP index](#the-local-dblp-index))
 
 ## Installation
 
@@ -101,13 +102,17 @@ DBLP publishes all of its data as a monthly XML dump under the CC0 license. The 
 
 **First start.** If no local index is installed, the server downloads the current release in the background (about 1.3 GB, unpacked to 4.2 GB). This takes about 2 minutes at 100 Mbit/s and about 9 minutes at 20 Mbit/s. Meanwhile, each tool call waits up to 40 seconds for the index and then answers with the download progress, so the first search takes longer than usual. An interrupted download resumes where it stopped.
 
-**Updates.** A new local index is released every month. The installed one changes only when you update it:
+**Updates.** A new local index is released early each month, and the server installs it on its own. It looks for a newer release at most once a day. When there is one, the first tool call of a session starts the download in the background, so a server that nobody uses downloads nothing. The old index answers until the new one is installed. The server then switches without a restart and tells the model which release its answers come from. Papers added to DBLP after the release date are not in the index until the next release.
+
+**Disk space for an update.** An update needs about 5.7 GB of free space, because the old index stays until the new one is verified. With less free space, down to about 1.5 GB, the server downloads and verifies the new release, deletes the old index and unpacks the new one in its place. Tool calls wait for the few seconds this takes. The server does this only while no other mcp-dblp server runs on the same machine. Otherwise it keeps the download and finishes the update in a later session.
+
+**Updating by hand.** With `MCP_DBLP_AUTO_UPDATE=0` the server only reports a newer release, and this command installs it:
 
 ```bash
 uvx --from mcp-dblp mcp-dblp-index update
 ```
 
-The old index keeps serving until the new one is installed. Papers added to DBLP after the release date are not in the index until the next release.
+A server that is pointed at a specific index file with `MCP_DBLP_INDEX` does not look for updates.
 
 **Command line.** `mcp-dblp-index` manages the index:
 
@@ -126,6 +131,7 @@ The old index keeps serving until the new one is installed. Papers added to DBLP
 | `MCP_DBLP_HOME`              | Directory for the index and downloads (default `~/.mcp-dblp`), e.g. on a disk with more space      |
 | `MCP_DBLP_INDEX`             | Path of a specific index file; `http` switches to the dblp.org web API (blocked by dblp.org)      |
 | `MCP_DBLP_FIRST_START_WAIT`  | Seconds a tool call waits for the first-start download (default 40)                                |
+| `MCP_DBLP_AUTO_UPDATE`       | `0` turns off the automatic monthly update; the server then only reports a newer release             |
 
 ```json
 {

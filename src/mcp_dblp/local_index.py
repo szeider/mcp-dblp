@@ -33,7 +33,10 @@ allowed, e.g. Windows without admin rights) and fetch_status.json (progress, see
 FetchStatus; the server reads it while it downloads the index on first start);
 dump/ holds dblp XML dumps for `build`.  After a successful fetch, index files of
 releases older than the new one are deleted (a file still in use is retried at the
-next fetch); the file `current` points to is never deleted.
+next fetch).  The file `current` points to is deleted only by a fetch that lacks the
+disk space to keep it while the new index is unpacked, and only when no server has it
+open (readers.lock, see _delete_for_swap).  update_check.json holds the manifest last
+read, so that the servers of one machine ask for it at most once a day.
 
 The dump references an external DTD (dblp-*.dtd, hosted on dblp.org behind the
 bot check) only for named character entities.  We replace the DOCTYPE with an
@@ -678,6 +681,9 @@ RELEASE_MANIFEST_URL = (
 MANIFEST_ENV = "MCP_DBLP_MANIFEST_URL"
 STATUS_FILE = "fetch_status.json"
 LOCK_FILE = "fetch.lock"
+READERS_LOCK = "readers.lock"  # shared lock of the servers that have an index open
+CHECK_FILE = "update_check.json"  # the manifest last read, shared by all servers
+CHECK_INTERVAL = 24 * 3600  # seconds a server reuses the manifest in CHECK_FILE
 CHUNK = 1 << 20
 DOWNLOAD_PASSES = 3  # attempts over all manifest urls (each resumes the .part)
 # zstd -19 uses windows <= 8 MB; allow long-distance mode (--long=31) as well.
@@ -692,6 +698,10 @@ class FetchError(Exception):
 
 class FetchBusyError(FetchError):
     """Another process is fetching into the same index directory."""
+
+
+class ManifestSchemaError(FetchError):
+    """The published index has a schema this version of mcp-dblp cannot read."""
 
 
 def manifest_url(release: str | None = None, url: str | None = None) -> str:
@@ -729,7 +739,7 @@ def validate_manifest(m, url: str = "manifest") -> dict:
     if missing or not m.get("urls"):
         raise FetchError(f"{url}: missing fields {missing + ([] if m.get('urls') else ['urls'])}")
     if str(m["schema"]) != SCHEMA_VERSION:
-        raise FetchError(
+        raise ManifestSchemaError(
             f"{url}: index schema {m['schema']}, this mcp-dblp reads schema {SCHEMA_VERSION}; "
             "upgrade mcp-dblp (or use --release for an older index)"
         )
@@ -750,6 +760,51 @@ def validate_manifest(m, url: str = "manifest") -> dict:
     ):
         raise FetchError(f"{url}: invalid urls {urls!r}")
     return m
+
+
+def installed_release(index_dir: str | None = None) -> str:
+    """Release of the index `current` points to ('' without one)."""
+    cur = current_index(index_dir)
+    return read_meta(cur).get("release", "") if cur else ""
+
+
+def published_manifest(
+    index_dir: str | None = None, manifest: str | None = None, max_age: float = 0
+) -> dict:
+    """The manifest of the latest published release.
+
+    With max_age > 0, a manifest read from the same URL less than max_age seconds ago
+    (index_dir/update_check.json, written by any server or CLI call) is returned
+    without a request.  Raises FetchError."""
+    index_dir = index_dir or default_index_dir()
+    url = manifest_url(None, manifest)
+    cache = os.path.join(index_dir, CHECK_FILE)
+    if max_age > 0:
+        try:
+            with open(cache, encoding="utf-8") as f:
+                c = json.load(f)
+            if c.get("url") == url and 0 <= time.time() - float(c["checked"]) < max_age:
+                return validate_manifest(c["manifest"], cache)
+        except (OSError, ValueError, KeyError, TypeError, FetchError):
+            pass
+    m = read_manifest(url)
+    tmp = f"{cache}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"checked": time.time(), "url": url, "manifest": m}, f)
+        os.replace(tmp, cache)
+    except OSError:
+        pass  # the cache only saves requests
+    return m
+
+
+def check_update(
+    index_dir: str | None = None, manifest: str | None = None, max_age: float = 0
+) -> dict | None:
+    """The manifest of the published release if it is newer than the current index,
+    else None (max_age: see published_manifest).  Raises FetchError."""
+    m = published_manifest(index_dir, manifest, max_age)
+    return m if installed_release(index_dir) < m["release"] else None
 
 
 def _now_iso() -> str:
@@ -1066,8 +1121,14 @@ def fetch(
     status: FetchStatus | None = None,
     echo: bool = False,
     manifest_data: dict | None = None,
+    release_index=None,
 ) -> str:
     """Download, verify and install the prebuilt index; returns its path.
+
+    The current index stays in place until the new one is verified.  Only when the
+    disk has no room for both is the current index deleted before the new one is
+    unpacked (_delete_for_swap); release_index() is then called first, so that a
+    server running the fetch closes its own handle on the index.
 
     Raises FetchBusyError if another fetch holds the lock, FetchError on any failure (also
     recorded as state 'failed' in the status file)."""
@@ -1076,7 +1137,9 @@ def fetch(
     st = status or FetchStatus(os.path.join(index_dir, STATUS_FILE), echo=echo)
     try:
         with _fetch_lock(index_dir):
-            return _fetch(release, manifest, force, keep, index_dir, st, manifest_data)
+            return _fetch(
+                release, manifest, force, keep, index_dir, st, manifest_data, release_index
+            )
     except FetchBusyError:
         raise
     except Exception as e:
@@ -1085,7 +1148,7 @@ def fetch(
         raise FetchError(msg) from e
 
 
-def _fetch(release, manifest, force, keep, index_dir, st, manifest_data) -> str:
+def _fetch(release, manifest, force, keep, index_dir, st, manifest_data, release_index=None) -> str:
     m = manifest_data or read_manifest(manifest_url(release, manifest))
     if release and m["release"] != release:
         raise FetchError(f"the manifest is for release {m['release']}, not {release}")
@@ -1108,7 +1171,18 @@ def _fetch(release, manifest, force, keep, index_dir, st, manifest_data) -> str:
     if force:
         _remove(zst, zst + ".part", zst + ".part.sha256")
     _remove(tmp)
-    check_space(m, zst, index_dir)
+    swap = None  # low disk space: the current index, deleted before the new one is unpacked
+    try:
+        check_space(m, zst, index_dir)
+    except FetchError:
+        swap = _swap_candidate(m, zst, cur, index_dir)
+        if swap is None:
+            raise
+        if st.echo:
+            print(
+                "low disk space: the current index is deleted before the new one is unpacked",
+                file=sys.stderr,
+            )
 
     zst_ok = False
     if os.path.isfile(zst) and os.path.getsize(zst) == m["size"]:
@@ -1117,18 +1191,23 @@ def _fetch(release, manifest, force, keep, index_dir, st, manifest_data) -> str:
     if not zst_ok:
         _remove(zst)
         _download(m, zst, st)
-    _unpack(m, zst, tmp, st)
+    readers = _delete_for_swap(swap, m, index_dir, release_index) if swap else None
+    try:
+        _unpack(m, zst, tmp, st)
 
-    st.state("installing")
-    meta = read_meta(tmp)
-    if meta.get("schema") != SCHEMA_VERSION or meta.get("release") != m["release"]:
-        _remove(tmp)
-        raise FetchError(
-            f"the unpacked index has schema {meta.get('schema')!r} and release "
-            f"{meta.get('release')!r}; expected {SCHEMA_VERSION!r} and {m['release']!r}"
-        )
-    os.replace(tmp, final)
-    set_current(final, index_dir)
+        st.state("installing")
+        meta = read_meta(tmp)
+        if meta.get("schema") != SCHEMA_VERSION or meta.get("release") != m["release"]:
+            _remove(tmp)
+            raise FetchError(
+                f"the unpacked index has schema {meta.get('schema')!r} and release "
+                f"{meta.get('release')!r}; expected {SCHEMA_VERSION!r} and {m['release']!r}"
+            )
+        os.replace(tmp, final)
+        set_current(final, index_dir)
+    finally:
+        if readers is not None:
+            readers.close()
     if not keep:
         _remove(zst)
     cleanup_superseded(index_dir, st.echo)
@@ -1169,6 +1248,92 @@ def check_space(m: dict, zst: str, index_dir: str) -> None:
             f"{free / 1e9:.1f} GB free; free up space or set {HOME_ENV} to a directory on a "
             "larger volume"
         )
+
+
+def lock_readers(index_dir: str, exclusive: bool = False):
+    """Lock index_dir/readers.lock without blocking: shared for a server that has an
+    index of index_dir open, exclusive for a fetch that deletes the current index to
+    make room (_delete_for_swap).  Returns the open lock file (close it to release), or
+    None where flock is missing (Windows, where an open file cannot be deleted anyway).
+    Raises BlockingIOError while the lock is held the other way."""
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    f = open(os.path.join(index_dir, READERS_LOCK), "a+")  # noqa: SIM115 (kept open)
+    try:
+        fcntl.flock(f, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        raise
+    return f
+
+
+def swap_space_needed(m: dict, zst: str, old: str) -> int:
+    """Free bytes a fetch needs when the current index old is deleted before the new
+    one is unpacked: room for the rest of the download (+5%), and afterwards for the
+    sqlite (+5%) in the space of old."""
+    left = m["size"] - _resumable_bytes(m, zst)
+    download = round(left * (1 + SPACE_MARGIN))
+    unpack = round(m["sqlite_size"] * (1 + SPACE_MARGIN)) + left - os.path.getsize(old)
+    return max(download, unpack, 0)
+
+
+def _swap_candidate(m: dict, zst: str, cur: str | None, index_dir: str) -> str | None:
+    """The current index, if deleting it before unpacking makes the fetch fit; else None.
+
+    Only an index inside index_dir qualifies, and not the one MCP_DBLP_INDEX names."""
+    if not cur:
+        return None
+    old = os.path.realpath(cur)
+    if os.path.dirname(old) != os.path.realpath(index_dir):
+        return None
+    env = (os.environ.get("MCP_DBLP_INDEX") or "").strip()
+    if env and os.path.realpath(os.path.expanduser(env)) == old:
+        return None
+    if shutil.disk_usage(index_dir).free < swap_space_needed(m, zst, old):
+        return None
+    return old
+
+
+def _delete_for_swap(old: str, m: dict, index_dir: str, release_index=None):
+    """Low disk space: delete the current index old so that the new one fits.
+
+    The download is complete and verified at this point.  Returns the exclusive
+    readers lock (None on Windows), to be closed after the new index is installed;
+    servers that start meanwhile find no index and follow this fetch's status file.
+    While another server has an index open, old is left alone and FetchError is raised:
+    deleting an open file frees no space (POSIX) or fails (Windows)."""
+    if release_index:
+        release_index()
+    busy = (
+        f"not enough disk space in {index_dir} to keep the current index while the new one "
+        "is unpacked, and the current index cannot be deleted first because another "
+        "mcp-dblp server is using it; the download is kept, and the update is retried "
+        "when no other server is running"
+    )
+    try:
+        readers = lock_readers(index_dir, exclusive=True)
+    except OSError as e:
+        raise FetchError(busy) from e
+    try:
+        os.remove(old)
+    except OSError as e:
+        if readers is not None:
+            readers.close()
+        raise FetchError(busy) from e
+    need = round(m["sqlite_size"] * (1 + SPACE_MARGIN))
+    free = shutil.disk_usage(index_dir).free
+    if free < need:  # e.g. an older mcp-dblp server (no readers lock) still has old open
+        if readers is not None:
+            readers.close()
+        raise FetchError(
+            f"not enough disk space in {index_dir} after deleting the old index: "
+            f"{need / 1e9:.1f} GB needed, {free / 1e9:.1f} GB free (space held by a running "
+            "mcp-dblp server is freed when it exits); the download is kept, run "
+            "`mcp-dblp-index fetch` then"
+        )
+    return readers
 
 
 _RELEASE_FILE_RE = re.compile(
@@ -1223,9 +1388,8 @@ def update(
     echo: bool = True,
 ) -> int:
     """Fetch the manifest's release if it is newer than the current index."""
-    m = read_manifest(manifest_url(None, manifest))
-    cur = current_index(index_dir)
-    have = read_meta(cur).get("release", "") if cur else ""
+    m = published_manifest(index_dir, manifest)
+    have = installed_release(index_dir)
     if have and have >= m["release"] and not force:
         print(f"current index is up to date (release {have})")
         with contextlib.suppress(FetchBusyError), _fetch_lock(index_dir or default_index_dir()):

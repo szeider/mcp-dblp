@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -576,3 +577,323 @@ def test_first_start_follows_other_process(idx):
         "The dblp index has been downloaded and is being unpacked (1000 MB of 4150 MB). "
         "Retry in a few minutes."
     )
+
+
+# ------------------------------------------------- update check and automatic update
+
+
+def _installed(mini_index, idx, release="2026-09-01") -> str:
+    p = _index_copy(mini_index, os.path.join(idx, f"dblp-{release}.sqlite"), release)
+    local_index.set_current(p, idx)
+    return p
+
+
+@pytest.fixture
+def rel10(mini_index, tmp_path):
+    return _index_copy(mini_index, tmp_path / "src-10.sqlite", "2026-10-01")
+
+
+@pytest.fixture
+def newer(server, mini_index, rel10, idx, monkeypatch):
+    """Release 09 installed in idx, release 10 published; returns its manifest."""
+    _installed(mini_index, idx)
+    monkeypatch.setenv("MCP_DBLP_MANIFEST_URL", f"{server.base}/latest.json")
+    return publish(server, rel10, "2026-10-01")
+
+
+def _wait(cond, timeout=5.0) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _manifest_requests(server):
+    return [r for r in server.requests if r[0] == "/latest.json"]
+
+
+def test_check_update_and_cache(server, newer, idx):
+    assert local_index.check_update(idx)["release"] == "2026-10-01"
+    assert len(_manifest_requests(server)) == 1
+    # a manifest read less than max_age ago is reused; max_age=0 asks again
+    assert local_index.check_update(idx, max_age=3600)["release"] == "2026-10-01"
+    assert len(_manifest_requests(server)) == 1
+    assert local_index.check_update(idx)["release"] == "2026-10-01"
+    assert len(_manifest_requests(server)) == 2
+    # a cache entry for another URL or an old one is not used
+    cache = os.path.join(idx, local_index.CHECK_FILE)
+    with open(cache) as f:
+        c = json.load(f)
+    c["checked"] -= 7200
+    with open(cache, "w") as f:
+        json.dump(c, f)
+    local_index.check_update(idx, max_age=3600)
+    assert len(_manifest_requests(server)) == 3
+    local_index.fetch(index_dir=idx)
+    assert local_index.check_update(idx, max_age=3600) is None
+
+
+def test_schema_mismatch_is_its_own_error(server, rel10, idx):
+    publish(server, rel10, "2026-10-01", schema=3)
+    with pytest.raises(local_index.ManifestSchemaError, match="upgrade mcp-dblp"):
+        local_index.check_update(idx, manifest=f"{server.base}/latest.json")
+    assert not os.path.exists(os.path.join(idx, local_index.CHECK_FILE))
+
+
+def test_auto_update_waits_for_a_tool_call(server, newer, idx):
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_fetch=True, auto_update=True)
+    assert b.fetcher is None and b.updater is not None
+    assert _wait(lambda: b.updater.available == "2026-10-01")
+    time.sleep(0.1)
+    assert _zst_requests(server) == []  # a server nobody uses downloads nothing
+    assert b.update_note() == ("", "")
+    assert b.release == "2026-09-01"
+    b.tool_called()
+    b.updater.thread.join(10)
+    assert b.updater.error is None
+    assert b.release == "2026-10-01"  # picked up without a restart
+    assert b.search(query="treewidth")
+    assert b.update_note() == ("", "")
+    assert not os.path.exists(os.path.join(idx, "dblp-2026-09-01.sqlite"))
+    assert len(_zst_requests(server)) == 1
+    b.tool_called()  # the check is a day's work: no second one
+    assert len(_manifest_requests(server)) == 2  # cached check + fresh manifest for the fetch
+    b.release_for_swap()
+
+
+def test_auto_update_up_to_date(server, mini_index, rel09, idx, monkeypatch):
+    _installed(mini_index, idx)
+    monkeypatch.setenv("MCP_DBLP_MANIFEST_URL", f"{server.base}/latest.json")
+    publish(server, rel09, "2026-09-01")
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_update=True)
+    b.tool_called()
+    b.updater.thread.join(5)
+    assert b.update_note() == ("", "") and _zst_requests(server) == []
+    b.release_for_swap()
+
+
+def test_auto_update_turned_off(server, newer, idx, monkeypatch):
+    monkeypatch.setenv("MCP_DBLP_AUTO_UPDATE", "0")
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_update=True)
+    b.tool_called()
+    b.updater.thread.join(5)
+    kind, text = b.update_note()
+    assert kind == "off"
+    assert "2026-10-01" in text and "uvx --from mcp-dblp mcp-dblp-index update" in text
+    assert _zst_requests(server) == [] and b.release == "2026-09-01"
+    b.release_for_swap()
+
+
+def test_auto_update_failure_is_reported(newer, idx):
+    def fail(**kw):
+        raise FetchError("not enough disk space in /x: the index needs about 5.7 GB")
+
+    b = backend_mod.IndexBackend(index_dir=idx)
+    b.start_update(fetch_fn=fail)
+    b.tool_called()
+    b.updater.thread.join(5)
+    kind, text = b.update_note()
+    assert kind == "failed"
+    assert text.startswith(
+        "A newer DBLP dump (2026-10-01) is available, but installing it failed: "
+        "not enough disk space in /x"
+    )
+    assert b.search(query="treewidth")  # the old index keeps answering
+    b.release_for_swap()
+
+
+def test_auto_update_check_failure_is_silent(mini_index, idx):
+    _installed(mini_index, idx)  # the manifest URL of conftest is unreachable
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_update=True)
+    b.tool_called()
+    b.updater.thread.join(10)
+    assert b.update_note() == ("", "") and b.updater.error is None
+    b.release_for_swap()
+
+
+def test_auto_update_schema_error_is_reported(server, mini_index, rel10, idx, monkeypatch):
+    _installed(mini_index, idx)
+    monkeypatch.setenv("MCP_DBLP_MANIFEST_URL", f"{server.base}/latest.json")
+    publish(server, rel10, "2026-10-01", schema=3)
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_update=True)
+    b.updater.thread.join(5)
+    kind, text = b.update_note()
+    assert kind == "failed" and "upgrade mcp-dblp" in text
+    b.release_for_swap()
+
+
+def test_no_auto_update_with_env_path(mini_index, idx, tmp_path):
+    p = _installed(mini_index, idx)
+    b = backend_mod.select_backend(env={"MCP_DBLP_INDEX": p}, index_dir=idx, auto_update=True)
+    b.tool_called()
+    assert b.updater is None and b.update_note() == ("", "")
+    b.release_for_swap()
+
+
+def test_update_check_repeats_after_a_day(server, newer, idx, monkeypatch):
+    monkeypatch.setenv("MCP_DBLP_AUTO_UPDATE", "0")
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_update=True)
+    first = b.updater
+    first.thread.join(5)
+    b.tool_called()
+    assert b.updater is first
+    first.started -= local_index.CHECK_INTERVAL
+    b.tool_called()
+    assert b.updater is not first
+    b.updater.thread.join(5)
+    b.release_for_swap()
+
+
+# -------------------------------------------- low disk space: swap without double space
+
+
+def _volume(monkeypatch, idx, room: int):
+    """Pretend idx lies on a volume with `room` free bytes now; files written to idx
+    use them up and deleted files give them back."""
+
+    def used():
+        return sum(os.lstat(os.path.join(idx, f)).st_size for f in os.listdir(idx))
+
+    capacity = used() + room
+    usage = shutil.disk_usage(".")
+    monkeypatch.setattr(
+        local_index.shutil, "disk_usage", lambda p: usage._replace(free=capacity - used())
+    )
+
+
+def _swap_room(m, idx) -> int:
+    """Free bytes with which only the swap fits (plus slack for status and lock files)."""
+    old = os.path.join(idx, "dblp-2026-09-01.sqlite")
+    room = local_index.swap_space_needed(m, os.path.join(idx, m["file"]), old) + 8192
+    assert room < round((m["size"] + m["sqlite_size"]) * 1.05)  # too little for both
+    return room
+
+
+def test_low_space_swap(server, newer, idx, monkeypatch):
+    pytest.importorskip("fcntl")
+    _volume(monkeypatch, idx, _swap_room(newer, idx))
+    released = []
+    path = local_index.fetch(index_dir=idx, release_index=lambda: released.append(1))
+    assert released == [1]
+    assert local_index.current_index(idx) == path
+    assert local_index.read_meta(path)["release"] == "2026-10-01"
+    assert not os.path.exists(os.path.join(idx, "dblp-2026-09-01.sqlite"))
+    assert local_index.read_status(idx)["state"] == "done"
+    local_index.lock_readers(idx, exclusive=True).close()  # the readers lock is free again
+
+
+def test_low_space_swap_too_little_room(server, newer, idx, monkeypatch):
+    _volume(monkeypatch, idx, _swap_room(newer, idx) - 8192 - 1000)
+    with pytest.raises(FetchError, match="not enough disk space"):
+        local_index.fetch(index_dir=idx)
+    assert _zst_requests(server) == []
+    assert local_index.installed_release(idx) == "2026-09-01"
+
+
+def test_low_space_swap_refused_while_another_server_reads(server, newer, idx, monkeypatch):
+    pytest.importorskip("fcntl")
+    _volume(monkeypatch, idx, _swap_room(newer, idx))
+    other = backend_mod.IndexBackend(index_dir=idx)  # stands for a server in another session
+    assert other.search(query="treewidth")
+    with pytest.raises(FetchError, match="another mcp-dblp server is using it"):
+        local_index.fetch(index_dir=idx)
+    assert other.search(query="treewidth") and other.release == "2026-09-01"
+    assert local_index.installed_release(idx) == "2026-09-01"
+    assert os.path.exists(os.path.join(idx, newer["file"]))  # the download is kept
+    other.release_for_swap()  # that session ends
+    local_index.fetch(index_dir=idx)
+    assert local_index.installed_release(idx) == "2026-10-01"
+    assert len(_zst_requests(server)) == 1  # no second download
+
+
+def test_low_space_swap_by_the_server(server, newer, idx, monkeypatch):
+    pytest.importorskip("fcntl")
+    _volume(monkeypatch, idx, _swap_room(newer, idx))
+    b = backend_mod.select_backend(env={}, index_dir=idx, auto_update=True)
+    assert b.search(query="treewidth") and b._readers is not None
+    b.tool_called()
+    b.updater.thread.join(10)
+    assert b.updater.error is None
+    assert b.release == "2026-10-01" and b.search(query="treewidth")
+    assert not os.path.exists(os.path.join(idx, "dblp-2026-09-01.sqlite"))
+    b.release_for_swap()
+
+
+def test_index_unavailable_during_swap_waits_for_the_update(mini_index, idx):
+    # the updater deleted the old index and is unpacking: tool calls report its progress
+    _installed(mini_index, idx)
+    gate = threading.Event()
+
+    def swapping(index_dir, status, manifest_data, release_index):
+        release_index()
+        os.remove(os.path.join(index_dir, "dblp-2026-09-01.sqlite"))
+        status.state("unpacking", 4150 << 20, 1000 << 20)
+        gate.wait(10)
+        p = _installed(mini_index, index_dir, "2026-10-01")
+        return p
+
+    b = backend_mod.IndexBackend(index_dir=idx)
+    assert b.release == "2026-09-01"
+    b.start_update(check_fn=lambda *a, **k: {"release": "2026-10-01"}, fetch_fn=swapping)
+    b.tool_called()
+    try:
+        assert _wait(lambda: b._local is None and b.fetch_in_progress())
+        with pytest.raises(backend_mod.IndexUnavailable) as e:
+            b.search(query="treewidth")
+        assert str(e.value).startswith("The dblp index has been downloaded and is being unpacked")
+    finally:
+        gate.set()
+        b.updater.thread.join(10)
+    assert b.release == "2026-10-01" and not b.fetch_in_progress()
+    b.release_for_swap()
+
+
+# ------------------------------------------------------- notes about the update
+
+
+@pytest.mark.asyncio
+async def test_update_notes_in_answers(mini_index, newer, idx):
+    from mcp.client import Client
+
+    from mcp_dblp.server import create_server
+
+    gate = threading.Event()
+
+    def slow_fetch(index_dir, status, manifest_data, release_index):
+        status.state("downloading", 1205 << 20, 310 << 20)
+        assert gate.wait(10)
+        return _installed(mini_index, index_dir, "2026-10-01")
+
+    b = backend_mod.IndexBackend(index_dir=idx)
+    b.start_update(fetch_fn=slow_fetch)
+    assert _wait(lambda: b.updater.available == "2026-10-01")
+    running = "A newer DBLP dump (2026-10-01) is being installed in the background"
+    try:
+        async with Client(create_server(b)) as client:
+            r = await client.call_tool("search", {"query": "treewidth"})
+            assert len(r.content) == 3  # results, instructions, note
+            assert "dump of 2026-09-01" in r.content[1].text
+            assert r.content[2].text.startswith(f"\n---\nNote: {running}")
+            assert "answers come from the dump of 2026-09-01" in r.content[2].text
+            r = await client.call_tool("search", {"query": "treewidth"})
+            assert len(r.content) == 1  # said once
+            assert _wait(lambda: b.updater.fetching)
+            r = await client.call_tool("search", {"query": "zzzqqqxxx"})
+            assert len(r.content) == 1  # an empty answer repeats it
+            assert f"{running} (310 of 1205 MB downloaded)" in r.content[0].text
+            gate.set()
+            b.updater.thread.join(10)
+            r = await client.call_tool("search", {"query": "treewidth"})
+            assert len(r.content) == 2
+            assert r.content[1].text == (
+                "\n---\nNote: The local copy of DBLP was updated during this session: "
+                "answers now come from the dump of 2026-10-01."
+            )
+            r = await client.call_tool("search", {"query": "treewidth"})
+            assert len(r.content) == 1
+    finally:
+        gate.set()
+        b.updater.thread.join(10)
+        b.release_for_swap()
