@@ -11,6 +11,8 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from importlib import resources
@@ -137,6 +139,23 @@ def _cap_output(result: list[types.TextContent]) -> list[types.TextContent]:
         "(year_from/year_to, venue_filter).]"
     )
     return [types.TextContent(type="text", text=text[:cut] + note)] + result[1:]
+
+
+def wsl_path(path):
+    """Map a Windows path (C:\\..., \\\\wsl.localhost\\...) to the WSL path when running in WSL.
+
+    Clients on Windows can start the server inside WSL; they pass Windows paths. Elsewhere
+    (no wslpath) and for other paths, the path is returned unchanged.
+    """
+    if not re.match(r"[A-Za-z]:[\\/]|\\\\", path) or not shutil.which("wslpath"):
+        return path
+    try:
+        result = subprocess.run(
+            ["wslpath", "-u", path], capture_output=True, text=True, check=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return path
+    return result.stdout.strip() or path
 
 
 def export_bibtex_entries(entries, path):
@@ -394,7 +413,7 @@ def create_server(backend) -> Server:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'); a leading ~ is expanded, relative paths are rejected. The .bib extension is added automatically if missing. Parent directories are created if needed.",
+                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'); a leading ~ is expanded, relative paths are rejected. When the server runs in WSL, Windows paths (e.g., 'C:\\refs.bib') are accepted. The .bib extension is added automatically if missing. Parent directories are created if needed.",
                         },
                     },
                     "required": ["path"],
@@ -720,7 +739,7 @@ def create_server(backend) -> Server:
                             )
                         ]
 
-                    path = os.path.expanduser(path)
+                    path = os.path.expanduser(wsl_path(path))
                     if not os.path.isabs(path):
                         return [
                             types.TextContent(
