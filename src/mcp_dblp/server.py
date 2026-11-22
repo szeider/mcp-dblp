@@ -151,9 +151,15 @@ def wsl_path(path):
         return path
     try:
         result = subprocess.run(
-            ["wslpath", "-u", path], capture_output=True, text=True, check=True, timeout=10
+            ["wslpath", "-u", path],
+            stdin=subprocess.DEVNULL,  # the server's stdin is the MCP stdio channel
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,  # runs on the event loop
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        logger.warning(f"wslpath could not convert {path!r}: {e}")
         return path
     return result.stdout.strip() or path
 
@@ -413,7 +419,13 @@ def create_server(backend) -> Server:
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'); a leading ~ is expanded, relative paths are rejected. When the server runs in WSL, Windows paths (e.g., 'C:\\refs.bib') are accepted. The .bib extension is added automatically if missing. Parent directories are created if needed.",
+                            "description": "Absolute path for the .bib file (e.g., '/path/to/refs.bib'); a leading ~ is expanded, relative paths are rejected."
+                            + (
+                                " This server runs in WSL: Windows paths (e.g., 'C:\\refs.bib') are accepted and converted."
+                                if shutil.which("wslpath")
+                                else ""
+                            )
+                            + " The .bib extension is added automatically if missing. Parent directories are created if needed.",
                         },
                     },
                     "required": ["path"],

@@ -86,6 +86,43 @@ def test_wsl_path_without_wslpath(monkeypatch):
     assert server_mod.wsl_path("C:\\refs.bib") == "C:\\refs.bib"
 
 
+def test_wsl_path_call_and_fallback(monkeypatch):
+    monkeypatch.setattr(server_mod.shutil, "which", lambda _: "/usr/bin/wslpath")
+    calls = []
+
+    def run(args, **kw):
+        calls.append((args, kw))
+        return subprocess.CompletedProcess(args, 0, stdout="/mnt/c/refs.bib\n")
+
+    monkeypatch.setattr(server_mod.subprocess, "run", run)
+    assert server_mod.wsl_path("C:\\refs.bib") == "/mnt/c/refs.bib"
+    assert calls[0][0] == ["wslpath", "-u", "C:\\refs.bib"]
+    assert calls[0][1]["stdin"] is subprocess.DEVNULL  # not the MCP stdio channel
+
+    def fail(args, **kw):
+        raise subprocess.CalledProcessError(1, args)
+
+    def undecodable(args, **kw):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    for broken in (fail, undecodable):
+        monkeypatch.setattr(server_mod.subprocess, "run", broken)
+        assert server_mod.wsl_path("C:\\refs.bib") == "C:\\refs.bib"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wslpath", [None, "/usr/bin/wslpath"])
+async def test_wsl_sentence_only_with_wslpath(session_backend, monkeypatch, wslpath):
+    monkeypatch.setattr(server_mod.shutil, "which", lambda _: wslpath)
+    async with Client(create_server(session_backend)) as c:
+        tools = (await c.list_tools()).tools
+    tool = next(t for t in tools if t.name == "export_bibtex")
+    schema = getattr(tool, "input_schema", None) or tool.inputSchema
+    desc = schema["properties"]["path"]["description"]
+    assert ("WSL" in desc) == (wslpath is not None)
+    assert "relative paths are rejected." in desc and "The .bib extension" in desc
+
+
 @pytest.mark.skipif(shutil.which("wslpath") is None, reason="needs WSL")
 def test_wsl_path_converts_windows_paths():
     assert server_mod.wsl_path("C:\\Users\\u\\refs.bib").endswith("/c/Users/u/refs.bib")
