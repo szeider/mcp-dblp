@@ -223,7 +223,7 @@ Export all collected BibTeX entries to a .bib file.
 
 **Parameters:**
 
-- `path` (string, required): Absolute path for the .bib file (e.g., "/path/to/refs.bib"); a leading `~` is expanded. Relative paths are rejected.
+- `path` (string, required): Absolute path for the .bib file (e.g., "/path/to/refs.bib"); a leading `~` is expanded. Relative paths are rejected. When the server runs in WSL, Windows paths (`C:\...`, `\\wsl.localhost\...`) are accepted and converted with `wslpath`, so that clients on Windows can start the server in WSL.
 
 **Behavior:**
 

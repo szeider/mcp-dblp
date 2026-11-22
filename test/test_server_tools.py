@@ -1,10 +1,14 @@
 """Tool-level checks over an in-memory MCP session with the local mini index."""
 
+import shutil
+import subprocess
+
 import pytest
 from mcp.client import Client
 
 from mcp_dblp import backend as backend_mod
 from mcp_dblp import dblp_client
+from mcp_dblp import server as server_mod
 from mcp_dblp.server import create_server
 
 # 2026-07-28 (stateless, the v2 default) and the 2025-era initialize handshake
@@ -69,6 +73,42 @@ async def test_export_requires_absolute_path(mode, session_backend, tmp_path, mo
         r = await c.call_tool("export_bibtex", {"path": str(out)})
         assert "Exported 1 references" in _text(r)
         assert out.read_text(encoding="utf-8").startswith("@")
+
+
+def test_wsl_path_leaves_other_paths_alone(monkeypatch):
+    monkeypatch.setattr(server_mod.shutil, "which", lambda _: "/usr/bin/wslpath")
+    for p in ["/home/u/refs.bib", "~/refs.bib", "refs.bib"]:
+        assert server_mod.wsl_path(p) == p
+
+
+def test_wsl_path_without_wslpath(monkeypatch):
+    monkeypatch.setattr(server_mod.shutil, "which", lambda _: None)
+    assert server_mod.wsl_path("C:\\refs.bib") == "C:\\refs.bib"
+
+
+@pytest.mark.skipif(shutil.which("wslpath") is None, reason="needs WSL")
+def test_wsl_path_converts_windows_paths():
+    assert server_mod.wsl_path("C:\\Users\\u\\refs.bib").endswith("/c/Users/u/refs.bib")
+    assert server_mod.wsl_path("C:/x/refs.bib").endswith("/c/x/refs.bib")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+async def test_export_converts_windows_path(mode, session_backend, tmp_path, monkeypatch):
+    out = tmp_path / "refs.bib"
+    monkeypatch.setattr(server_mod.shutil, "which", lambda _: "/usr/bin/wslpath")
+    monkeypatch.setattr(
+        server_mod.subprocess,
+        "run",
+        lambda args, **kw: subprocess.CompletedProcess(args, 0, stdout=f"{out}\n"),
+    )
+    async with Client(create_server(session_backend), mode=mode) as c:
+        await c.call_tool(
+            "add_bibtex_entry", {"dblp_key": "journals/tcs/GodelS20", "citation_key": "g"}
+        )
+        r = await c.call_tool("export_bibtex", {"path": "C:\\Users\\u\\refs.bib"})
+        assert f"Exported 1 references to {out}" in _text(r)
+        assert out.exists()
 
 
 @pytest.mark.asyncio
